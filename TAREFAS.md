@@ -542,3 +542,88 @@ Junto com a Fase 2: (T19 ‖ T21 ‖ T25) → (T20 ‖ T22 ‖ T24) → T26 → 
 
 ## Ordem de execução atualizada
 (T20 ‖ T24) → T26 → T23 → T28 → T16 → T17 → T29 → T27.
+
+---
+
+# Fase 5 — delegar trabalho a outros agentes e entender melhor a fala do Deivid
+
+## T30 — Delegar tarefas a agentes de linha de comando (Claude, Codex, Gemini, Qwen…)
+- Arquivos: `voz/motores_cli.py` (acrescentar `claude`), criar `voz/delegacao.py` e
+  `voz/tests/test_delegacao.py`; `voz/sentidos_mcp.py` (ferramentas novas); `voz/voz_prompt.md`;
+  `C:\Users\deivi\.claude\skills\secretario\SKILL.md` NÃO (o revisor atualiza).
+- Fazer:
+  - `motores_cli`: motor `claude` → `claude -p <prompt> --output-format json --permission-mode auto`
+    (resposta em `result`, sessão em `session_id`), resolvido com `resolver_executavel`.
+  - `delegacao.py`: execução em segundo plano de um agente sobre uma tarefa de trabalho.
+    `iniciar(agente, tarefa, pasta=None) -> id` (thread; pasta padrão = home; para `codex`
+    passar `-C pasta`; para os outros, `cwd=pasta`), `estado(id) -> {id, agente, status
+    (rodando|ok|erro|cancelada), inicio, fim, resposta (cortada em 4000), ferramentas}`,
+    `cancelar(id)`, `listar()`. Guarda os trabalhos em memória e também em SQLite
+    (`registro.BANCO`, tabela `delegacoes`). Proteção contra recursão: o processo filho
+    recebe `SECRETARIO_DELEGACAO=1`; se essa variável já existir, `iniciar` recusa
+    ("delegação aninhada não permitida"). Máximo de 3 delegações rodando ao mesmo tempo.
+  - `sentidos_mcp.py`: ferramentas `delegar(agente, tarefa, pasta="")` → id e texto curto;
+    `resultado_delegacao(id)`; `cancelar_delegacao(id)`; `agentes_disponiveis()` (de
+    `provedores.listar()`, só tipo cli).
+  - `voz_prompt.md`: seção curta "Delegar trabalho": use `delegar` para tarefas de trabalho
+    longas e bem definidas que outro agente executa melhor ou em paralelo (ex.: código →
+    `codex`; pesquisa ampla → `gemini-cli`); escreva a tarefa completa e autocontida (objetivo,
+    arquivos/pasta, critério de pronto); acompanhe com `resultado_delegacao`; revise o
+    resultado antes de dizer ao Deivid que está pronto.
+- Testes: `iniciar` com executor falso (monkeypatch em `motores_cli.executar`), estados,
+  cancelamento, limite de 3, recusa de recursão; `montar_comando("claude", ...)`.
+
+## T31 — Padrão de fala: confiança por palavra, aprendizado de pronúncia, pausa adaptativa e idiomas
+- Depende de: T24. Arquivos: `voz/comum.py`, `voz/vocabulario.py`, `voz/assistente_voz.py`,
+  `voz/sentidos_mcp.py`, `voz/config.py`, `voz/voz_prompt.md`, criar `voz/padrao_fala.py`
+  e `voz/tests/test_padrao_fala.py`.
+- Fazer:
+  - `transcrever(audio, detalhado=False)`: com `detalhado=True` usa `word_timestamps=True` e
+    devolve `{"texto", "palavras": [{"palavra", "prob"}], "idioma", "prob_idioma"}`. O motor
+    emite `{"evento":"transcricao","texto":...,"duvidosas":[palavras com prob < 0.5]}` junto
+    com a mensagem do usuário (para a T32/T27 sublinhar na interface).
+  - Aprendizado pela IA: ferramenta MCP `aprender_pronuncia(ouvido, correto)` →
+    `vocabulario.aprender_correcao`, só aceita se `ouvido` tiver 2+ palavras OU for uma palavra
+    que não está num dicionário básico de português (lista em `padrao_fala.PALAVRAS_COMUNS`,
+    ~300 palavras frequentes) — evita trocar palavras comuns como "link" ou "gemas" sozinhas.
+    `voz_prompt.md`: "o pedido vem de transcrição; quando você perceber que uma palavra foi
+    transcrita errado e tiver certeza do que ele quis dizer (ex.: 'abre meu linketim' =
+    LinkedIn), chame `aprender_pronuncia` com o trecho ouvido e o correto".
+  - `padrao_fala.py`: `registrar_fala(texto, palavras, pausas)` acumula em SQLite (tabela
+    `falas`: ts, texto, duvidosas, pausa_max_interna); `resumo() -> dict` (palavras mais
+    usadas que não são comuns, correções mais aplicadas, pausa típica p90);
+    `atualizar_nota(cofre)` grava `Perfil/Fala.md` (palavras e expressões dele, termos que o
+    reconhecimento erra, pausa típica) — chamado uma vez por dia ou a cada 50 falas.
+    `vocabulario.termos` inclui as 20 palavras mais usadas do `resumo`.
+  - Pausa adaptativa: `Microfone.gravar_fala` mede as pausas internas (silêncios entre
+    trechos de voz dentro da mesma fala) e devolve-as; a cada 30 falas, se `"pausa_auto": true`
+    (padrão), ajusta `pausa_fala = clamp(p90 + 0.3, 1.0, 2.2)` no config.
+  - Idiomas: config `"idiomas": ["pt"]` (padrão) ou ex.: `["pt", "en"]`. Se a transcrição em
+    pt vier com `prob_idioma < 0.5` e houver outro idioma configurado, transcreve de novo com
+    detecção automática e usa o resultado se a probabilidade for maior. A interface de
+    configurações (T27) lista os idiomas; para a voz de resposta, avisar se não houver voz
+    do Windows para o idioma (Configurações > Hora e idioma > Fala).
+- Testes: filtro do `aprender_pronuncia`; `resumo` e `atualizar_nota` em banco/cofre
+  temporários; cálculo da pausa adaptativa com limites; escolha de idioma com função de
+  transcrição falsa.
+
+## T32 — Calibração por palavras-chave
+- Depende de: T31 (e do comando `ditar` da T29; se ainda não existir, crie-o aqui:
+  `{"cmd":"ditar"}` → grava uma fala, transcreve e devolve `{"evento":"ditado","texto",
+  "palavras"}` sem executar nada). Arquivos: `app/renderer.js`, `app/index.html`,
+  `app/estilo.css`, `voz/assistente_voz.py`, `voz/padrao_fala.py`.
+- Fazer: tela "Calibrar voz" (botão no cartão de voz e nas Configurações):
+  1) Ruído: pede 3 s de silêncio e recalibra o limiar do microfone (`Microfone._calibrar`).
+  2) Palavras-chave: mostra uma por vez (FIXOS do vocabulário + 10 termos do cofre + termos
+     que o Deivid acrescentar num campo "adicionar palavra"), ele fala, o app mostra o que foi
+     entendido com ✓ ou ✗. Para cada ✗, cria a correção `ouvido → esperado` (com
+     `vocabulario.aprender_correcao`, respeitando o mesmo filtro da T31) e pede para repetir
+     uma vez para confirmar.
+  3) Frase longa com pausas: pede para ler uma frase com uma pausa no meio e ajusta
+     `pausa_fala` com a pausa medida.
+  Ao final, resumo: quantas palavras certas, correções criadas, nova pausa. Grava em
+  `Perfil/Fala.md` a data da última calibração.
+- Verificação: `node --check`; `py_compile`; testes existentes passam.
+
+## Ordem de execução atualizada
+(T26 ‖ T30) → T23 → T28 → T16 → T17 → T31 → T29 → T32 → T27.
