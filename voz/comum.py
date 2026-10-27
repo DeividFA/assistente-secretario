@@ -50,6 +50,7 @@ class Microfone:
         if isinstance(dispositivo, str) and dispositivo.isdigit():
             dispositivo = int(dispositivo)
         self.fila = queue.Queue()
+        self.nivel = 0.0
         self.mudo = False      # enquanto o secretário fala
         self.pausado = False   # microfone mutado pelo usuário
         self.stream = sd.InputStream(samplerate=TAXA, channels=1, dtype="float32",
@@ -58,6 +59,7 @@ class Microfone:
         self.limiar = self._calibrar()
 
     def _cb(self, dados, frames, t, status):
+        self.nivel = rms(dados[:, 0])
         if not (self.mudo or self.pausado):
             self.fila.put(dados[:, 0].copy())
 

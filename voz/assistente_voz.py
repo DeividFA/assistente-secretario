@@ -239,6 +239,12 @@ class Assistente:
                 self.sair()
         self.sair()  # app fechou o stdin
 
+    def emitir_nivel(self):
+        while self.ativo:
+            valor = 0 if self.mic.pausado else min(1, self.mic.nivel / self.mic.limiar / 4)
+            emitir(evento="nivel", valor=round(valor, 3))
+            time.sleep(0.15)
+
     def sair(self):
         self.ativo = False
         if self.proc and self.proc.poll() is None:
@@ -250,6 +256,7 @@ class Assistente:
     def rodar(self):
         if IPC:
             threading.Thread(target=self.ler_app, daemon=True).start()
+            threading.Thread(target=self.emitir_nivel, daemon=True).start()
         registrar("Sistema", f"ouvindo (limiar de voz {self.mic.limiar:.3f}). Diga 'secretário' + comando.")
         self.estado_ocioso()
         if not IPC:

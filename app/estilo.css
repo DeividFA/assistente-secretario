@@ -60,6 +60,8 @@ svg { width: 20px; height: 20px; display: block; }
 .bolinha.mudo, .bolinha.parado { background: var(--vermelho); }
 .usuario-info { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.15; }
 .usuario-info small { color: var(--texto-3); font-size: 12px; }
+.nivel-microfone { height: 3px; margin: 3px 0; background: var(--fundo-3); border-radius: 2px; overflow: hidden; }
+.nivel-microfone span { display: block; height: 100%; width: 0; background: var(--verde); transition: width .15s linear; }
 .icone { background: none; border: 0; color: var(--texto-2); padding: 6px; border-radius: 4px; }
 .icone:hover { background: var(--hover); color: var(--texto); }
 .icone .risco { display: none; }

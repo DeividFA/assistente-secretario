@@ -133,12 +133,14 @@ function mostrarEstado(estado) {
   $('estado-texto').textContent = ROTULOS[estado] || estado;
   $('digitando').hidden = estado !== 'pensando';
   $('btn-falar').classList.toggle('escutando', estado === 'escutando');
+  if (estado === 'parado' || estado === 'carregando') $('nivel-microfone').style.width = '0%';
   if (estado === 'pensando') $('digitando-texto').textContent = 'Secretário está trabalhando…';
 }
 
 window.secretario.aoEvento((ev) => {
   switch (ev.evento) {
     case 'estado': mostrarEstado(ev.estado); break;
+    case 'nivel': $('nivel-microfone').style.width = `${Math.max(0, Math.min(1, ev.valor)) * 100}%`; break;
     case 'mudo': $('btn-mudo').classList.toggle('desligado', ev.valor); break;
     case 'mensagem':
       if (ev.autor === 'voce' && ev.via !== 'texto') adicionar({ autor: 'voce', texto: ev.texto, via: 'voz' });
