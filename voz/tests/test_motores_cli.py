@@ -59,7 +59,7 @@ def test_ignora_linhas(cli, linha):
 
 def test_motor_desconhecido(cli):
     with pytest.raises(ValueError):
-        cli.montar_comando("claude", "oi")
+        cli.montar_comando("inexistente", "oi")
 
 
 def processo_falso(cli, monkeypatch, saida, codigo=0):

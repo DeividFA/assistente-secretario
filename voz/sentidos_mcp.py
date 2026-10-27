@@ -23,6 +23,8 @@ import pyperclip
 from mcp.server.fastmcp import FastMCP, Image
 
 from comum import CAPTURAS, Microfone, bip, falar as _falar, transcrever
+import delegacao
+import provedores
 
 pyautogui.FAILSAFE = True  # mouse no canto superior esquerdo aborta qualquer ação
 pyautogui.PAUSE = 0.15
@@ -34,6 +36,31 @@ LEMBRETES = Path(__file__).resolve().parent / "lembretes.json"
 
 def _arquivo(prefixo):
     return CAPTURAS / f"{prefixo}_{datetime.now():%Y%m%d_%H%M%S}.jpg"
+
+
+@mcp.tool()
+def delegar(agente: str, tarefa: str, pasta: str = "") -> dict:
+    """Delega trabalho completo e autocontido a um agente CLI em segundo plano."""
+    id = delegacao.iniciar(agente, tarefa, pasta or None)
+    return {"id": id, "texto": f"Trabalho iniciado com {agente}. Consulte resultado_delegacao."}
+
+
+@mcp.tool()
+def resultado_delegacao(id: str) -> dict:
+    """Consulta estado, resposta e ferramentas de um trabalho delegado."""
+    return delegacao.estado(id)
+
+
+@mcp.tool()
+def cancelar_delegacao(id: str) -> dict:
+    """Cancela um trabalho delegado e encerra a árvore do agente."""
+    return delegacao.cancelar(id)
+
+
+@mcp.tool()
+def agentes_disponiveis() -> list[dict]:
+    """Lista os agentes CLI e informa sua disponibilidade e motivo."""
+    return [agente for agente in provedores.listar() if agente["tipo"] == "cli"]
 
 
 @mcp.tool()

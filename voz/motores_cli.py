@@ -14,10 +14,10 @@ import subprocess
 import tempfile
 
 
-EXECUTAVEIS = {"codex": "codex", "gemini-cli": "gemini", "qwen": "qwen"}
+EXECUTAVEIS = {"claude": "claude", "codex": "codex", "gemini-cli": "gemini", "qwen": "qwen"}
 
 
-def montar_comando(nome, pedido, sessao=None, prompt_sistema=""):
+def montar_comando(nome, pedido, sessao=None, prompt_sistema="", pasta=None):
     if nome not in EXECUTAVEIS:
         raise ValueError("Motor de linha de comando desconhecido.")
     prompt = f"{prompt_sistema}\n\nPedido: {pedido}"
@@ -25,11 +25,13 @@ def montar_comando(nome, pedido, sessao=None, prompt_sistema=""):
         # As opções de exec não aceitas por resume ficam antes do subcomando.
         # --skip-git-repo-check: a pasta do usuário não é um repositório git.
         comando = ["codex", "exec", "--skip-git-repo-check", "-s", "workspace-write",
-                   "-C", str(Path.home())]
+                   "-C", str(Path(pasta) if pasta is not None else Path.home())]
         if sessao:
             comando.extend(["resume", sessao])
         return comando + ["--json", "--", prompt]
     comando = [EXECUTAVEIS[nome], "-p", prompt, "--output-format", "json"]
+    if nome == "claude":
+        comando.extend(["--permission-mode", "auto"])
     if sessao:
         comando.extend(["--resume", sessao])
     return comando
@@ -59,8 +61,8 @@ def interpretar_linha(nome, linha):
             return {"tipo": "ferramenta", "nome": item.get("tool") or item["type"],
                     "id": item.get("id"), "comando": item.get("command", "")}
         return None
-    # Gemini devolve um objeto com response; Qwen também pode usar result.
-    texto = dados.get("response", dados.get("result"))
+    # Claude usa result; Gemini usa response; Qwen também pode usar result.
+    texto = dados.get("result") if nome == "claude" else dados.get("response", dados.get("result"))
     if isinstance(texto, str) and not dados.get("is_error") and not dados.get("error"):
         evento = {"tipo": "resposta", "texto": texto}
         if isinstance(dados.get("session_id"), str):
@@ -101,14 +103,14 @@ def resolver_executavel(nome):
     return [caminho]
 
 
-def executar(nome, pedido, ao_evento, sessao=None, prompt_sistema=""):
+def executar(nome, pedido, ao_evento, sessao=None, prompt_sistema="", pasta=None, env=None):
     """Emite eventos e retorna o resultado após o término.
 
     O primeiro callback recebe {tipo: "processo", proc: Popen}. O chamador pode
     guardar o PID e cancelar com taskkill /pid PID /T /F enquanto a leitura segue.
     Falhas do CLI levantam RuntimeError; o processo é encerrado se o callback falhar.
     """
-    comando = montar_comando(nome, pedido, sessao, prompt_sistema)
+    comando = montar_comando(nome, pedido, sessao, prompt_sistema, pasta)
     comando = resolver_executavel(comando[0]) + comando[1:]
     resultado = {"resposta": "", "sessao": sessao, "ferramentas": [], "proc": None}
 
@@ -127,7 +129,8 @@ def executar(nome, pedido, ao_evento, sessao=None, prompt_sistema=""):
     with tempfile.TemporaryFile() as erros:
         proc = subprocess.Popen(
             comando, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=erros,
-            text=True, encoding="utf-8", errors="replace", cwd=str(Path.home()),
+            text=True, encoding="utf-8", errors="replace",
+            cwd=str(Path(pasta) if pasta is not None else Path.home()), env=env,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         resultado["proc"] = proc
         try:
