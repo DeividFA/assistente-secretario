@@ -27,6 +27,46 @@ const SUGESTOES = [
 
 let dados = carregar();
 let silencio = false;
+let tarefasFila = null;
+
+function mostrarTrabalhando(pensando = false) {
+  const rodando = tarefasFila === null ? Number(pensando) : tarefasFila.filter((t) => t.status === 'rodando').length;
+  if (rodando && $('trabalhando').hidden) $('trabalhando-passo').textContent = 'entendendo o pedido';
+  $('trabalhando-rotulo').textContent = `Trabalhando · ${rodando} ${rodando === 1 ? 'tarefa rodando' : 'tarefas rodando'}`;
+  $('trabalhando').hidden = rodando === 0;
+}
+
+function mostrarFila(tarefas) {
+  tarefasFila = tarefas.filter((t) => t.status === 'rodando' || t.status === 'pendente');
+  $('painel-fila').hidden = tarefasFila.length === 0;
+  $('fila-resumo').textContent = `Fila (${tarefasFila.length})`;
+  const lista = $('fila-tarefas');
+  lista.replaceChildren();
+  const prioridades = ['Urgente', 'Alta', 'Normal', 'Baixa'];
+  for (const tarefa of tarefasFila) {
+    const linha = document.createElement('li');
+    const rodando = tarefa.status === 'rodando';
+    const prioridade = prioridades[tarefa.prioridade] ? Number(tarefa.prioridade) : 2;
+    linha.innerHTML = `<span class="fila-estado ${rodando ? 'rodando' : 'pendente'}" role="img" aria-label="${rodando ? 'Rodando' : 'Pendente'}">${rodando
+      ? '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-8-8"/></svg>'
+      : '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>'}</span>
+      <span class="fila-prioridade prioridade-${prioridade}">${prioridades[prioridade]}</span>
+      <span class="fila-comando"></span><span class="fila-motor"></span>
+      <button type="button" class="fila-cancelar">✕</button>`;
+    const comando = linha.querySelector('.fila-comando');
+    comando.textContent = tarefa.comando;
+    comando.title = tarefa.comando;
+    const motor = linha.querySelector('.fila-motor');
+    motor.textContent = tarefa.motor || 'não informado';
+    motor.title = `Motor: ${motor.textContent}`;
+    const cancelar = linha.querySelector('.fila-cancelar');
+    cancelar.title = `Cancelar tarefa ${tarefa.id}`;
+    cancelar.setAttribute('aria-label', `Cancelar tarefa: ${tarefa.comando}`);
+    cancelar.onclick = () => window.secretario.enviar({ cmd: 'cancelar', id: tarefa.id });
+    lista.appendChild(linha);
+  }
+  mostrarTrabalhando();
+}
 
 function carregar() {
   try {
@@ -198,10 +238,8 @@ function mostrarEstado(estado) {
   $('pilula-texto').textContent = rotulo.toLowerCase();
   $('cartao-voz').classList.toggle('mudo', estado === 'mudo');
   $('btn-falar').classList.toggle('escutando', estado === 'escutando');
-  const trabalhando = estado === 'pensando';
-  if (trabalhando && $('trabalhando').hidden) $('trabalhando-passo').textContent = 'entendendo o pedido';
-  $('trabalhando').hidden = !trabalhando;
-  if (trabalhando) rolarParaFim();
+  mostrarTrabalhando(estado === 'pensando');
+  if (!$('trabalhando').hidden) rolarParaFim();
   if (estado === 'parado' || estado === 'carregando' || estado === 'mudo') mostrarNivel(0);
 }
 
@@ -216,6 +254,7 @@ function mostrarNivel(valor) {
 
 window.secretario.aoEvento((ev) => {
   switch (ev.evento) {
+    case 'fila': mostrarFila(ev.tarefas); break;
     case 'estado': mostrarEstado(ev.estado); break;
     case 'nivel': mostrarNivel(ev.valor); break;
     case 'mudo': $('btn-mudo').classList.toggle('desligado', ev.valor); break;

@@ -194,6 +194,30 @@ kbd { font: 600 11px "Segoe UI", sans-serif; padding: 1px 6px; border-radius: 5p
   color: var(--texto-2); border: 1px solid var(--linha-2); }
 .botao-fantasma:hover { color: var(--vermelho); border-color: rgba(242, 84, 91, .4); background: rgba(242, 84, 91, .08); }
 
+/* fila de tarefas */
+.painel-fila { flex: none; width: 100%; max-width: 860px; margin: 0 auto;
+  padding: 0 24px; background: var(--fundo-1); border-top: 1px solid var(--linha); }
+.painel-fila[hidden] { display: none; }
+.painel-fila summary { padding: 9px 0; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--texto-2); }
+#fila-tarefas { list-style: none; margin: 0; padding: 0 0 8px; max-height: 160px; overflow-y: auto; }
+#fila-tarefas li { display: flex; align-items: center; gap: 8px; padding: 5px 0; min-width: 0; }
+.fila-estado { flex: none; color: var(--texto-3); }
+.fila-estado svg { width: 15px; height: 15px; }
+.fila-estado.rodando { color: var(--menta); }
+.fila-estado.rodando svg { animation: girar-fila 1s linear infinite; }
+@keyframes girar-fila { to { transform: rotate(360deg); } }
+.fila-prioridade { flex: none; padding: 1px 7px; border-radius: 999px; font-size: 11px; background: var(--fundo-3); }
+.prioridade-0 { color: var(--vermelho); background: rgba(242, 84, 91, .12); }
+.prioridade-1 { color: var(--ambar); background: rgba(245, 181, 68, .12); }
+.prioridade-2 { color: var(--texto-2); }
+.prioridade-3 { color: var(--azul); background: rgba(29, 159, 224, .12); }
+.fila-comando { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; }
+.fila-motor { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11px; color: var(--texto-2); }
+.fila-cancelar { flex: none; width: 26px; height: 26px; border-radius: 6px; color: var(--texto-3); }
+.fila-cancelar:hover { color: var(--vermelho); background: var(--fundo-3); }
+.painel-fila summary:focus-visible, .fila-cancelar:focus-visible { outline: 2px solid var(--menta); outline-offset: 2px; }
+
 /* compositor */
 .compositor { flex: none; max-width: 908px; width: 100%; margin: 0 auto; padding: 8px 24px 14px; }
 .caixa { display: flex; align-items: flex-end; gap: 6px; padding: 6px; border-radius: 16px; background: var(--fundo-3);

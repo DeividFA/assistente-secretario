@@ -84,13 +84,18 @@
           <div class="trabalhando" id="trabalhando" hidden>
             <div class="avatar sec"><img src="icones/app.svg" alt=""></div>
             <div class="trabalhando-corpo">
-              <div class="brilho">Trabalhando<span class="pontos"><i></i><i></i><i></i></span></div>
+              <div class="brilho"><span id="trabalhando-rotulo">Trabalhando</span><span class="pontos"><i></i><i></i><i></i></span></div>
               <small id="trabalhando-passo">entendendo o pedido</small>
             </div>
             <button class="botao-fantasma" id="btn-cancelar">Cancelar</button>
           </div>
         </div>
       </section>
+
+      <details class="painel-fila" id="painel-fila" hidden open>
+        <summary id="fila-resumo">Fila (0)</summary>
+        <ul id="fila-tarefas" aria-label="Tarefas ativas"></ul>
+      </details>
 
       <form class="compositor" id="form">
         <div class="caixa">
