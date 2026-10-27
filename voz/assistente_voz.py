@@ -157,6 +157,8 @@ class Assistente:
         self.mic = Microfone(abrir=False)
         self.ditado_pendente = False
         self.ditando = False
+        self.comandos_calibracao = queue.Queue()
+        self.calibracao = None
         self.config_mic = config.carregar()
         self.config_mic['ponte_ativa'] = False
         self.ponte = None
@@ -359,7 +361,7 @@ class Assistente:
     def _dizer(self, texto, voz=None):
         """Fala com o microfone mudo, para não ouvir a própria voz."""
         self.consultar_microfone()
-        if self.apps_mic:
+        if self.apps_mic or self.calibracao:
             emitir(evento="resposta_silenciosa", texto=texto)
             return
         if self.silencio:
@@ -820,7 +822,125 @@ class Assistente:
         emitir(evento="perfil_atual", respostas=memoria.ler_perfil_inicial(),
                assuntos=list(memoria.ASSUNTOS), concluido=config.carregar().get("perfil_inicial") is True)
 
+    def calibrar_voz(self, cmd):
+        import padrao_fala
+        acao = cmd.get('acao')
+        if acao == 'cancelar':
+            self.calibracao = None
+            self.mic.limpar()
+            emitir(evento='calibracao', etapa='cancelada')
+            return
+        # Consulta fresca: não abrir o dispositivo que foi cedido a uma chamada.
+        self.consultar_mic_apos = 0.0
+        self.consultar_microfone()
+        if self.apps_mic and self.config_mic.get('mic_em_chamada') == 'liberar':
+            raise ValueError('Não é possível calibrar durante a chamada: o microfone está liberado para ' +
+                             ', '.join(self.apps_mic) + '. Encerre a chamada e tente novamente.')
+        if self.mic.pausado:
+            raise ValueError('Ative o microfone antes de calibrar a voz.')
+        if acao == 'iniciar':
+            if self.ditado_pendente:
+                raise ValueError('Aguarde o ditado terminar antes de calibrar.')
+            self.calibracao = {'etapa': 'ruido', 'palavras': padrao_fala.palavras_calibracao(),
+                               'indice': 0, 'repetindo': False, 'certas': 0, 'correcoes': 0}
+            emitir(evento='calibracao', etapa='ruido')
+            return
+        sessao = self.calibracao
+        if not sessao:
+            raise ValueError('Inicie uma calibração primeiro.')
+        if acao == 'adicionar':
+            palavra = cmd.get('palavra', '').strip()
+            if not palavra or len(palavra) > 60 or len(palavra.split()) > 3:
+                raise ValueError('Adicione um termo de até três palavras e 60 caracteres.')
+            if sessao['etapa'] not in ('ruido', 'palavra'):
+                raise ValueError('As palavras desta calibração já foram concluídas.')
+            if palavra.casefold() not in [p.casefold() for p in sessao['palavras']]:
+                sessao['palavras'].append(palavra)
+            emitir(evento='calibracao', etapa=sessao['etapa'], adicionada=palavra,
+                   esperado=sessao['palavras'][sessao['indice']])
+            return
+        if acao != 'gravar':
+            raise ValueError('Etapa de calibração inválida.')
+        interromper_fala()
+        self.ditando = True
+        self.comando_mic_ate = 0.0
+        try:
+            self.atualizar_microfone()
+            if not self.mic.disponivel():
+                raise ValueError('Microfone indisponível. Tente novamente.')
+            self.mic.limpar()
+            if sessao['etapa'] == 'ruido':
+                emitir(evento='calibracao', etapa='gravando', texto='Fique em silêncio por 3 segundos…')
+                self.mic.calibrando = True
+                try:
+                    limiar = self.mic._calibrar(segundos=3)
+                    if not self.mic.disponivel():
+                        raise ValueError('Microfone interrompido durante a calibração.')
+                    self.mic.limiar = limiar
+                finally:
+                    self.mic.calibrando = False
+                sessao['etapa'] = 'palavra'
+                emitir(evento='calibracao', etapa='palavra', esperado=sessao['palavras'][0])
+                return
+            longa = sessao['etapa'] == 'frase'
+            emitir(evento='calibracao', etapa='gravando', texto='Pode ler a frase…' if longa else 'Pode falar a palavra…')
+            audio = self.mic.gravar_fala(espera_max=8, pausa=3.5 if longa else None, detalhado=True)
+            if audio is None:
+                raise ValueError('Nenhuma fala capturada. Confira o microfone e tente novamente.')
+            audio, pausas = audio
+            detalhes = transcrever(audio, detalhado=True)
+            self.consultar_mic_apos = 0.0
+            self.consultar_microfone()
+            if self.apps_mic and self.config_mic.get('mic_em_chamada') == 'liberar':
+                raise ValueError('Calibração interrompida: o microfone foi liberado para uma chamada. Tente novamente após encerrá-la.')
+            ouvido = detalhes['texto'].strip()
+            if not ouvido:
+                raise ValueError('Nenhuma fala reconhecida. Tente novamente.')
+            if longa:
+                pausas = [p for p in pausas if .25 <= p <= 3.5]
+                if not pausas or len(ouvido.split()) < 8:
+                    raise ValueError('Leia a frase inteira com uma pausa no meio e tente novamente.')
+                pausa = padrao_fala.ajustar_pausa(max(pausas), calibracao=True)
+                padrao_fala.registrar_calibracao()
+                emitir(evento='calibracao', etapa='concluida', certas=sessao['certas'],
+                       correcoes=sessao['correcoes'], pausa=pausa)
+                self.calibracao = None
+                return
+            esperado = sessao['palavras'][sessao['indice']]
+            limpar = lambda texto: re.sub(r'[^\w]+', ' ', normalizar(texto)).strip()
+            certa = limpar(ouvido) == limpar(esperado)
+            criada = False
+            repetir = not certa and not sessao['repetindo']
+            if repetir:
+                criada = padrao_fala.aprender_pronuncia(ouvido, esperado)
+                sessao['correcoes'] += int(criada)
+                sessao['repetindo'] = True
+            else:
+                sessao['certas'] += int(certa)
+                sessao['indice'] += 1
+                sessao['repetindo'] = False
+            sessao['etapa'] = 'frase' if sessao['indice'] == len(sessao['palavras']) else 'palavra'
+            proxima = sessao['palavras'][sessao['indice']] if sessao['etapa'] == 'palavra' else ''
+            emitir(evento='calibracao', etapa=sessao['etapa'], ouvido=ouvido, testada=esperado,
+                   certa=certa, criada=criada, repetir=repetir, esperado=proxima)
+        finally:
+            self.mic.limpar()
+            self.ditando = False
+            self.atualizar_microfone()
+
     def ouvir_comando(self):
+        if not self.comandos_calibracao.empty():
+            try:
+                self.calibrar_voz(self.comandos_calibracao.get_nowait())
+            except Exception as erro:
+                emitir(evento='calibracao', etapa='erro', texto=str(erro),
+                       retomar=self.calibracao['etapa'] if self.calibracao else 'iniciar')
+            return None
+        if self.calibracao:
+            self.atualizar_microfone()
+            self.mic.limpar()
+            time.sleep(.1)
+            return None
         if self.ditado_pendente:
             self.ditado_pendente = False
             try:
@@ -832,7 +952,8 @@ class Assistente:
                 self.comando_mic_ate = 0.0
                 self.atualizar_microfone()
                 audio = self.mic.gravar_fala(espera_max=8) if self.mic.stream is not None else None
-                emitir(evento="ditado", texto=transcrever(audio) if audio is not None else "")
+                detalhes = transcrever(audio, detalhado=True) if audio is not None else {'texto': '', 'palavras': []}
+                emitir(evento="ditado", texto=detalhes['texto'], palavras=detalhes['palavras'])
             except Exception as erro:
                 emitir(evento="ditado", texto="", erro=str(erro))
             finally:
@@ -845,7 +966,7 @@ class Assistente:
             time.sleep(0.1)
             return None
         audio = self.mic.gravar_fala(espera_max=0.5, detalhado=True)
-        if audio is None or self.ditado_pendente:
+        if audio is None or self.ditado_pendente or not self.comandos_calibracao.empty():
             return None
         em_conversa = time.monotonic() < self.conversa_ate
         audio, pausas = audio
@@ -870,6 +991,8 @@ class Assistente:
                 comando = detalhes['texto']
             else:
                 comando = ""
+        if not self.comandos_calibracao.empty():
+            return None
         if comando:
             import padrao_fala
             try:
@@ -944,10 +1067,16 @@ class Assistente:
             except json.JSONDecodeError:
                 continue
             tipo = cmd.get("cmd")
+            if tipo == 'calibrar_voz':
+                self.comandos_calibracao.put(cmd)
+                continue
             if tipo == "perfil_atual":
                 self.emitir_perfil()
                 continue
             if tipo == "ditar":
+                if self.calibracao or not self.comandos_calibracao.empty():
+                    emitir(evento='ditado', texto='', palavras=[], erro='Conclua ou feche a calibração antes de ditar.')
+                    continue
                 self.ditado_pendente = True
                 continue
             if tipo == "perfil_inicial":

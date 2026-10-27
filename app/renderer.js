@@ -335,8 +335,76 @@ $('btn-vozes').onclick = () => {
 };
 $('fechar-vozes').onclick = () => $('painel-vozes').close();
 
+let etapaCalibracao = 'iniciar';
+let calibracaoOcupada = false;
+const fraseCalibracao = 'Hoje vou organizar meus projetos e documentos, [faça uma pausa de 1 a 2 segundos] depois vou conferir os compromissos da semana.';
+function mostrarCalibracao(ev) {
+  if (!$('calibrar-voz').open) return;
+  calibracaoOcupada = ev.etapa === 'gravando';
+  if (ev.etapa !== 'gravando') etapaCalibracao = ev.etapa === 'erro' ? ev.retomar : ev.etapa;
+  $('calibrar-gravar').disabled = calibracaoOcupada || etapaCalibracao === 'concluida';
+  $('calibrar-adicionar').disabled = calibracaoOcupada || !['ruido', 'palavra'].includes(etapaCalibracao);
+  $('calibrar-extras').hidden = !['ruido', 'palavra'].includes(etapaCalibracao);
+  $('calibrar-gravar').textContent = etapaCalibracao === 'iniciar' ? 'Começar' : 'Gravar';
+  if (ev.etapa === 'erro' || ev.etapa === 'gravando') {
+    $('calibrar-resultado').textContent = ev.texto;
+    return;
+  }
+  $('calibrar-instrucao').textContent = {
+    ruido: '1. Ruído: clique em Gravar e fique em silêncio por 3 segundos.',
+    palavra: '2. Palavras-chave: clique em Gravar e fale o termo abaixo.',
+    frase: '3. Leia a frase inteira com uma pausa no meio. Clique em Gravar quando estiver pronto.',
+    concluida: 'Calibração concluída. A data foi registrada em Perfil/Fala.md.',
+  }[ev.etapa] || '';
+  $('calibrar-esperado').textContent = ev.etapa === 'frase' ? fraseCalibracao : ev.esperado || '';
+  if (ev.ouvido !== undefined) {
+    $('calibrar-resultado').textContent = `${ev.certa ? '✓' : '✗'} ${ev.testada}: entendido “${ev.ouvido}”. ` +
+      (ev.repetir ? (ev.criada ? 'Correção criada. ' : 'Correção recusada pelo filtro de pronúncia. ') + 'Repita uma vez para confirmar.' : 'Próxima etapa pronta.');
+  } else if (ev.etapa === 'concluida') {
+    $('calibrar-resultado').textContent = `${ev.certas} palavras certas; ${ev.correcoes} correções criadas; nova pausa: ${ev.pausa.toFixed(2)} s.`;
+  } else {
+    $('calibrar-resultado').textContent = ev.adicionada ? `Adicionada: ${ev.adicionada}` : '';
+  }
+}
+function abrirCalibracao() {
+  etapaCalibracao = 'iniciar';
+  calibracaoOcupada = true;
+  $('calibrar-voz').showModal();
+  $('calibrar-instrucao').textContent = 'Verificando disponibilidade do microfone…';
+  $('calibrar-esperado').textContent = '';
+  $('calibrar-resultado').textContent = '';
+  $('calibrar-gravar').disabled = true;
+  $('calibrar-extras').hidden = true;
+  window.secretario.enviar({ cmd: 'calibrar_voz', acao: 'iniciar' });
+}
+$('btn-calibrar').onclick = abrirCalibracao;
+$('btn-configuracoes').onclick = () => $('configuracoes').showModal();
+$('fechar-configuracoes').onclick = () => $('configuracoes').close();
+$('configuracoes-calibrar').onclick = () => { $('configuracoes').close(); abrirCalibracao(); };
+$('calibrar-fechar').onclick = () => $('calibrar-voz').close();
+$('calibrar-voz').addEventListener('close', () => {
+  window.secretario.enviar({ cmd: 'calibrar_voz', acao: 'cancelar' });
+});
+$('calibrar-gravar').onclick = () => {
+  if (calibracaoOcupada) return;
+  calibracaoOcupada = true;
+  $('calibrar-gravar').disabled = true;
+  $('calibrar-adicionar').disabled = true;
+  window.secretario.enviar({ cmd: 'calibrar_voz', acao: etapaCalibracao === 'iniciar' ? 'iniciar' : 'gravar' });
+};
+$('calibrar-adicionar').onclick = () => {
+  const palavra = $('calibrar-palavra').value.trim();
+  if (!palavra || calibracaoOcupada) return;
+  calibracaoOcupada = true;
+  $('calibrar-gravar').disabled = true;
+  $('calibrar-adicionar').disabled = true;
+  window.secretario.enviar({ cmd: 'calibrar_voz', acao: 'adicionar', palavra });
+  $('calibrar-palavra').value = '';
+};
+
 window.secretario.aoEvento((ev) => {
   switch (ev.evento) {
+    case 'calibracao': mostrarCalibracao(ev); break;
     case 'perfil_atual':
       if (!perfilEditando) {
         perfilRespostas = ev.respostas;

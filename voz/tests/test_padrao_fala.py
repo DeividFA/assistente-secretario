@@ -93,3 +93,33 @@ def test_termos_do_vocabulario_nao_sao_duvidosos():
     palavras = [{"palavra": "LinkedIn", "prob": 0.01}, {"palavra": "Gemma.", "prob": 0.03},
                 {"palavra": "abriu", "prob": 0.3}, {"palavra": "meu", "prob": 0.9}]
     assert padrao_fala.duvidosas(palavras, ["LinkedIn", "Gemma"]) == ["abriu"]
+
+
+def test_palavras_calibracao_filtra_titulos_ruins(tmp_path):
+    import json, padrao_fala, vocabulario
+    (tmp_path / '.secretario').mkdir()
+    titulos = ['00 - Índice', 'LinkedIn carrossel - 2026-10-27', 'Bíblia', 'Casa', 'Montes Claros',
+               'Uma frase longa demais aqui']
+    (tmp_path / '.secretario' / 'indice.json').write_text(
+        json.dumps({'notas': [{'titulo': t} for t in titulos]}), encoding='utf-8')
+    extras = padrao_fala.palavras_calibracao(tmp_path)[len(vocabulario.FIXOS):]
+    assert extras == ['Bíblia', 'Montes Claros']
+
+
+def test_calibracao_registra_data_e_preserva_nota(tmp_path):
+    import padrao_fala
+    (tmp_path / 'Perfil').mkdir()
+    (tmp_path / 'Perfil' / 'Fala.md').write_text('# Fala\n\n- LinkedIn\n\nÚltima calibração: antiga\n', encoding='utf-8')
+    padrao_fala.registrar_calibracao(tmp_path)
+    texto = (tmp_path / 'Perfil' / 'Fala.md').read_text(encoding='utf-8')
+    assert '- LinkedIn' in texto and 'antiga' not in texto and texto.count('Última calibração:') == 1
+
+
+def test_pausa_da_calibracao_grava_mesmo_sem_pausa_auto(tmp_path, monkeypatch):
+    import json, config, padrao_fala
+    monkeypatch.setattr(config, 'BASE', tmp_path)
+    (tmp_path / 'config.json').write_text(json.dumps({'pausa_auto': False, 'voz': 'windows'}), encoding='utf-8')
+    assert padrao_fala.ajustar_pausa(1.5) is None
+    assert padrao_fala.ajustar_pausa(1.5, calibracao=True) == 1.8
+    dados = json.loads((tmp_path / 'config.json').read_text(encoding='utf-8'))
+    assert dados['pausa_fala'] == 1.8 and dados['voz'] == 'windows'

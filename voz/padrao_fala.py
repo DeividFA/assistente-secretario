@@ -101,10 +101,10 @@ def pausa_adaptativa(pausa):
     return max(1.0, min(2.2, pausa + .3))
 
 
-def ajustar_pausa(pausa):
+def ajustar_pausa(pausa, calibracao=False):
     arquivo = config.BASE / 'config.json'
     dados = json.loads(arquivo.read_text(encoding='utf-8')) if arquivo.exists() else {}
-    if dados.get('pausa_auto', config.PADROES['pausa_auto']) is not True:
+    if not calibracao and dados.get('pausa_auto', config.PADROES['pausa_auto']) is not True:
         return
     dados['pausa_fala'] = pausa_adaptativa(pausa)
     descritor, nome = tempfile.mkstemp(dir=arquivo.parent, suffix='.tmp')
@@ -116,6 +116,42 @@ def ajustar_pausa(pausa):
         os.replace(nome, arquivo)
     finally:
         Path(nome).unlink(missing_ok=True)
+    return dados['pausa_fala']
+
+
+def palavras_calibracao(cofre=COFRE):
+    import vocabulario
+    nomes = list(vocabulario.FIXOS)
+    indice = Path(cofre) / '.secretario' / 'indice.json'
+    try:
+        notas = json.loads(indice.read_text(encoding='utf-8')).get('notas', [])
+    except (OSError, ValueError):
+        notas = []
+    vistos = {_normalizar(p) for p in nomes}
+    extras = 0
+    for nota in notas:
+        nome = nota.get('titulo', '')
+        # Só nomes próprios curtos servem para treinar pronúncia: nada de "00 - Índice",
+        # títulos com data ou palavras comuns do português.
+        if (not isinstance(nome, str) or re.search(r'\d', nome) or len(nome.split()) > 3
+                or _normalizar(nome.strip()) in PALAVRAS_COMUNS):
+            continue
+        if nome.strip() and _normalizar(nome.strip()) not in vistos:
+            nomes.append(nome.strip())
+            vistos.add(_normalizar(nome.strip()))
+            extras += 1
+            if extras == 10:
+                break
+    return nomes
+
+
+def registrar_calibracao(cofre=COFRE):
+    nota = Path(cofre) / 'Perfil' / 'Fala.md'
+    nota.parent.mkdir(parents=True, exist_ok=True)
+    texto = nota.read_text(encoding='utf-8') if nota.exists() else '# Fala\n'
+    texto = re.sub(r'^Última calibração:.*\n?', '', texto, flags=re.M)
+    nota.write_text(texto.rstrip() + '\n\nÚltima calibração: ' +
+                    datetime.now().isoformat(timespec='seconds') + '\n', encoding='utf-8')
 
 
 def duvidosas(palavras, termos=()):
@@ -175,6 +211,10 @@ def atualizar_nota(cofre=COFRE, banco=None):
             linhas.append(f'- {ouvido} → {correto}: {vezes}')
     linhas += ['', f"Pausa típica (p90): {dados['pausa_p90']:.2f} s.", '']
     nota = Path(cofre) / 'Perfil' / 'Fala.md'
+    if nota.exists():
+        ultima = re.search(r'^Última calibração:.*$', nota.read_text(encoding='utf-8'), re.M)
+        if ultima:
+            linhas += [ultima.group(), '']
     nota.parent.mkdir(parents=True, exist_ok=True)
     nota.write_text('\n'.join(linhas), encoding='utf-8')
 

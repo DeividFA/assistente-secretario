@@ -23,6 +23,15 @@
   background: var(--fundo-1); color: var(--texto); border: 1px solid var(--linha-2);
   border-radius: var(--raio); padding: 22px; }
 #painel-vozes::backdrop { background: rgba(0, 0, 0, .65); }
+#calibrar-voz, #configuracoes { width: min(620px, 90vw); max-height: 85vh; overflow: auto;
+  background: var(--fundo-1); color: var(--texto); border: 1px solid var(--linha-2);
+  border-radius: var(--raio); padding: 22px; }
+#calibrar-voz::backdrop, #configuracoes::backdrop { background: rgba(0, 0, 0, .65); }
+#calibrar-esperado { font-size: 22px; color: var(--menta); }
+#calibrar-extras { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 18px 0; }
+#calibrar-palavra { background: var(--fundo-3); color: var(--texto); border: 1px solid var(--linha-2); padding: 8px; }
+#calibrar-voz button, #configuracoes button { padding: 8px 12px; background: var(--fundo-3); border-radius: 8px; }
+#calibrar-voz button:disabled { opacity: .4; cursor: default; }
 .vozes-topo { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .vozes-topo h2 { margin: 0; }
 #painel-vozes p, .voz-item small { color: var(--texto-2); }
