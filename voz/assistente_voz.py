@@ -20,6 +20,7 @@ Comandos do app (stdin, uma linha JSON cada):
 
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -28,6 +29,8 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+
+import fila
 
 from comum import BASE, Microfone, bip, falar, normalizar, texto_para_fala, transcrever
 
@@ -69,9 +72,13 @@ NOMES_FERRAMENTAS = {
 if IPC:
     sys.stdout.reconfigure(encoding="utf-8")
 _saida = threading.Lock()
+_registro = threading.Lock()
+_contexto = threading.local()
 
 
 def emitir(**evento):
+    if evento.get('evento') in ('mensagem', 'ferramenta', 'erro'):
+        evento.setdefault('tarefa', getattr(_contexto, 'id', None))
     if IPC:
         with _saida:
             sys.stdout.write(json.dumps(evento, ensure_ascii=False) + "\n")
@@ -83,10 +90,11 @@ def registrar(quem, texto):
     linha = f"{datetime.now():%Y-%m-%d %H:%M:%S}  {quem}: {texto}"
     if not IPC:
         print(linha, flush=True)
-    if LOG.exists() and LOG.stat().st_size > 1024 * 1024:
-        LOG.replace(LOG.with_name("log_voz.1.txt"))
-    with LOG.open("a", encoding="utf-8") as f:
-        f.write(linha + "\n")
+    with _registro:
+        if LOG.exists() and LOG.stat().st_size > 1024 * 1024:
+            LOG.replace(LOG.with_name("log_voz.1.txt"))
+        with LOG.open("a", encoding="utf-8") as f:
+            f.write(linha + "\n")
     try:
         evento(quem, texto)
     except Exception as e:  # o log no banco nunca pode derrubar o motor
@@ -103,30 +111,117 @@ def nome_ferramenta(nome):
 class Assistente:
     def __init__(self):
         self.mic = Microfone()
+        self.trabalhos = {}
+        self.trava = threading.RLock()
+        self.acordar = threading.Event()
+        self.falas = queue.Queue()
+        self.falando = False
         self.sessao = None
-        self.proc = None
-        self.ocupado = False
-        self.cancelado = False
         self.silencio = False  # não falar as respostas (equivalente ao "ensurdecer" do Discord)
         self.conversa_ate = 0.0
         self.ativo = True
         self.motor = ARQ_MOTOR.read_text(encoding="utf-8").strip() if ARQ_MOTOR.exists() else "claude"
         self.historico_local = []
 
+    @property
+    def ocupado(self):
+        with self.trava:
+            return bool(self.trabalhos)
+
+    def emitir_fila(self):
+        emitir(evento="fila", tarefas=fila.listar())
+
+    def despachar(self):
+        while self.ativo:
+            self.acordar.clear()
+            try:
+                with self.trava:
+                    pendentes = [t for t in fila.listar() if t['status'] == 'pendente']
+                    if pendentes:
+                        motor = pendentes[0]['motor']
+                        locais = any(t['motor'] == 'gemma' for t in self.trabalhos.values())
+                        vaga = (not self.trabalhos if motor == 'gemma'
+                                else not locais and len(self.trabalhos) < 2)
+                        if vaga:
+                            tarefa = fila.proxima()
+                            if tarefa:
+                                tarefa.update(proc=None, cancelado=False,
+                                              derivada=bool(self.trabalhos), sessao=self.sessao)
+                                if self.trabalhos:
+                                    tarefa['simultanea'] = True
+                                    for outra in self.trabalhos.values():
+                                        outra['simultanea'] = True
+                                self.trabalhos[tarefa['id']] = tarefa
+                                self.emitir_fila()
+                                threading.Thread(target=self.trabalhar, args=(tarefa,), daemon=True).start()
+                                continue
+            except Exception as e:
+                registrar('ERRO', f'Executor da fila: {e}')
+            self.acordar.wait(0.5)
+
+    def trabalhar(self, trabalho):
+        _contexto.id = trabalho['id']
+        _contexto.trabalho = trabalho
+        trabalho.update(status_final='erro', resposta_final='')
+        try:
+            if not trabalho['cancelado']:
+                self.tarefa(trabalho['comando'])
+        except Exception as e:
+            registrar('ERRO', str(e))
+            trabalho['resposta_final'] = str(e)
+            emitir(evento='erro', texto=str(e))
+        finally:
+            with self.trava:
+                try:
+                    fila.concluir(trabalho['id'], 'cancelada' if trabalho['cancelado']
+                                  else trabalho['status_final'], trabalho['resposta_final'])
+                finally:
+                    self.trabalhos.pop(trabalho['id'], None)
+                    self.acordar.set()
+            self.emitir_fila()
+            self.estado_ocioso()
+
+    def falar_fila(self):
+        while self.ativo:
+            texto, tarefa, pronto = self.falas.get()
+            try:
+                if tarefa is None or not tarefa['cancelado']:
+                    self._dizer(texto)
+                    if tarefa is not None:
+                        self.conversa_ate = time.monotonic() + JANELA_CONVERSA
+            except Exception as e:
+                registrar('ERRO', f'Fala: {e}')
+            finally:
+                pronto.set()
+                self.falas.task_done()
+
+    def dizer(self, texto, esperar=False):
+        trabalho = getattr(_contexto, 'trabalho', None)
+        if trabalho:
+            with self.trava:
+                if trabalho.get('simultanea'):
+                    texto = f"Sobre {trabalho['comando'][:60]}: {texto}"
+        pronto = threading.Event()
+        self.falas.put((texto, trabalho, pronto))
+        if esperar:
+            pronto.wait()
+
     def estado(self, estado):
         emitir(evento="estado", estado=estado)
 
     def estado_ocioso(self):
-        self.estado("pensando" if self.ocupado else ("mudo" if self.mic.pausado else "ouvindo"))
+        self.estado('falando' if self.falando else 'pensando' if self.ocupado
+                    else 'mudo' if self.mic.pausado else 'ouvindo')
 
     def mensagem(self, autor, texto):
         registrar({"voce": "Você", "secretario": "Secretário"}.get(autor, autor), texto)
         emitir(evento="mensagem", autor=autor, texto=texto)
 
-    def dizer(self, texto):
+    def _dizer(self, texto):
         """Fala com o microfone mudo, para não ouvir a própria voz."""
         if self.silencio:
             return
+        self.falando = True
         self.estado("falando")
         self.mic.mudo = True
         try:
@@ -135,6 +230,7 @@ class Assistente:
             time.sleep(0.2)
             self.mic.limpar()
             self.mic.mudo = False
+            self.falando = False
             self.estado_ocioso()
 
     def trocar_motor(self, motor):
@@ -161,7 +257,7 @@ class Assistente:
             try:
                 with urllib.request.urlopen(pedido, timeout=300) as resp:
                     for linha in resp:
-                        if self.cancelado:
+                        if _contexto.trabalho['cancelado']:
                             self.historico_local.pop()
                             status = "cancelada"
                             return
@@ -177,7 +273,7 @@ class Assistente:
                 self.dizer("Não consegui falar com o Gemma. Veja se o Ollama está aberto, "
                            "ou diga secretário, usar Claude.")
                 return
-            if self.cancelado:
+            if _contexto.trabalho['cancelado']:
                 self.historico_local.pop()
                 status = "cancelada"
                 return
@@ -188,21 +284,14 @@ class Assistente:
             self.dizer(resposta)
             self.conversa_ate = time.monotonic() + JANELA_CONVERSA
         finally:
-            fim_tarefa(tarefa_id, "cancelada" if self.cancelado else status, resposta)
+            _contexto.trabalho.update(status_final='concluida' if status == 'ok' else 'erro', resposta_final=resposta)
+            fim_tarefa(tarefa_id, 'cancelada' if _contexto.trabalho['cancelado'] else status, resposta)
 
     def tarefa(self, comando):
         from registro import inicio_tarefa, fim_tarefa
-        self.ocupado = True
-        self.cancelado = False
         self.estado("pensando")
-        if ARQ_MOTOR.exists():  # permite trocar o motor editando o arquivo, sem reiniciar
-            self.motor = ARQ_MOTOR.read_text(encoding="utf-8").strip() or "claude"
-        if self.motor == "gemma":
-            try:
-                self.tarefa_local(comando)
-            finally:
-                self.ocupado = False
-                self.estado_ocioso()
+        if _contexto.trabalho['motor'] == "gemma":
+            self.tarefa_local(comando)
             return
         tarefa_id = inicio_tarefa(comando, "claude")
         status = "erro"
@@ -212,23 +301,31 @@ class Assistente:
         try:
             args = [CLAUDE, "-p", comando, "--output-format", "stream-json", "--verbose",
                     "--permission-mode", "auto", "--append-system-prompt", PROMPT_VOZ]
-            if self.sessao:
-                args += ["--resume", self.sessao]
+            trabalho = _contexto.trabalho
+            if trabalho['sessao']:
+                args += ['--resume', trabalho['sessao']]
+                if trabalho['derivada']:
+                    args += ['--fork-session']
             # stdin=DEVNULL: senão o claude -p fica esperando ler o canal de comandos do app.
-            self.proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                         stderr=subprocess.STDOUT, cwd=str(Path.home()), text=True,
-                                         encoding="utf-8", creationflags=subprocess.CREATE_NO_WINDOW)
+            with self.trava:
+                if trabalho['cancelado'] or not self.ativo:
+                    return
+                trabalho['proc'] = subprocess.Popen(
+                    args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, cwd=str(Path.home()), text=True,
+                    encoding="utf-8", creationflags=subprocess.CREATE_NO_WINDOW)
             resposta = None
-            erro = ""
-            for linha in self.proc.stdout:
+            erro = ''
+            for linha in _contexto.trabalho['proc'].stdout:
                 try:
                     ev = json.loads(linha)
                 except json.JSONDecodeError:
                     erro = (erro + linha)[-2000:]
                     continue
-                if ev.get("session_id") and ev["session_id"] != self.sessao:
-                    self.sessao = ev["session_id"]
-                    emitir(evento="sessao", id=self.sessao)
+                if not trabalho["derivada"] and ev.get("session_id") and ev["session_id"] != self.sessao:
+                    with self.trava:
+                        self.sessao = ev["session_id"]
+                        emitir(evento="sessao", id=self.sessao)
                 if ev.get("type") == "assistant":
                     for bloco in ev.get("message", {}).get("content", []):
                         if bloco.get("type") == "tool_use":
@@ -239,10 +336,10 @@ class Assistente:
                 elif ev.get("type") == "result":
                     resposta = ev.get("result")
                     status = "erro" if ev.get("is_error") else "ok"
-            self.proc.wait()
-            if self.cancelado:
+            _contexto.trabalho['proc'].wait()
+            if _contexto.trabalho['cancelado']:
                 return
-            if self.proc.returncode:
+            if _contexto.trabalho['proc'].returncode:
                 status = "erro"
             if resposta is None:
                 registrar("ERRO", erro.strip()[-500:])
@@ -258,52 +355,82 @@ class Assistente:
             status = "erro"
             raise
         finally:
-            self.proc = None
-            self.ocupado = False
-            self.estado_ocioso()
-            fim_tarefa(tarefa_id, "cancelada" if self.cancelado else status,
+            proc = _contexto.trabalho['proc']
+            if proc and proc.poll() is None:
+                subprocess.run(['taskkill', '/pid', str(proc.pid), '/T', '/F'],
+                               creationflags=subprocess.CREATE_NO_WINDOW)
+            _contexto.trabalho['proc'] = None
+            _contexto.trabalho.update(status_final='concluida' if status == 'ok' else 'erro',
+                                     resposta_final=resposta if resposta is not None else erro.strip()[-2000:])
+            fim_tarefa(tarefa_id, "cancelada" if _contexto.trabalho['cancelado'] else status,
                        resposta if resposta is not None else erro.strip()[-2000:], ferramentas)
 
-    def cancelar(self):
-        proc = self.proc
-        if proc and proc.poll() is None:
-            self.cancelado = True
-            subprocess.run(["taskkill", "/pid", str(proc.pid), "/T", "/F"],
-                           creationflags=subprocess.CREATE_NO_WINDOW)
-            self.mensagem("sistema", "Tarefa cancelada.")
-            self.dizer("Tarefa cancelada.")
-        elif self.ocupado and self.motor == "gemma":
-            self.cancelado = True  # tarefa_local para no próximo pedaço da resposta
-            self.mensagem("sistema", "Tarefa cancelada.")
-            self.dizer("Tarefa cancelada.")
-        else:
-            self.dizer("Não tem nada rodando.")
+    def cancelar(self, id=None, tudo=False):
+        with self.trava:
+            ids = ([t['id'] for t in fila.listar()] if tudo else
+                   [id] if id is not None else list(self.trabalhos)[-1:])
+            canceladas = []
+            for tarefa_id in ids:
+                if fila.cancelar(tarefa_id):
+                    canceladas.append(tarefa_id)
+                    trabalho = self.trabalhos.get(tarefa_id)
+                    if trabalho:
+                        trabalho['cancelado'] = True
+                        proc = trabalho['proc']
+                        if proc and proc.poll() is None:
+                            subprocess.run(['taskkill', '/pid', str(proc.pid), '/T', '/F'],
+                                           creationflags=subprocess.CREATE_NO_WINDOW)
+                    registrar('Sistema', 'Tarefa cancelada.')
+                    emitir(evento='mensagem', autor='sistema', texto='Tarefa cancelada.', tarefa=tarefa_id)
+            self.emitir_fila()
+            self.acordar.set()
+        self.dizer('Tarefa cancelada.' if canceladas else 'Não tem nada rodando.')
 
     def executar(self, comando):
         """Trata comandos de controle ou dispara uma tarefa."""
         c = normalizar(comando)
         troca = TROCA_MOTOR.search(c)
-        if troca and len(c.split()) <= 6 and not self.ocupado:  # frase curta: é comando, não tarefa
+        if troca and len(c.split()) <= 6:  # frase curta: é comando, não tarefa
             self.trocar_motor("gemma" if troca.group(2).startswith(("gem", "jem")) else "claude")
         elif c.startswith(("cancela", "para", "pare")):
-            self.cancelar()
+            numero = re.search(r'\b(\d+)\b', c)
+            self.cancelar(id=int(numero.group(1)) if numero else None, tudo='tudo' in c)
         elif re.fullmatch(r"(?:se )?reinici(?:a|ar|e)(?: (?:tudo|o app|o aplicativo|o motor))?", c.strip()):
-            self.dizer("Reiniciando.")
+            self.dizer("Reiniciando.", esperar=True)
             emitir(evento="reiniciar", completo=bool(re.search(r"\b(tudo|app|aplicativo)\b", c)))
             self.sair()
         elif c.startswith(("desligar", "desliga", "encerrar", "encerra")):
-            self.dizer("Até logo.")
+            self.dizer("Até logo.", esperar=True)
             self.sair()
         elif c.startswith("nova conversa"):
             self.sessao = None
             self.historico_local = []
             emitir(evento="nova_conversa")
             self.dizer("Ok, conversa nova.")
-        elif self.ocupado:
-            self.dizer("Ainda estou na tarefa anterior. Diga secretário, cancela, se quiser parar.")
         else:
             self.conversa_ate = 0
-            threading.Thread(target=self.tarefa, args=(comando,), daemon=True).start()
+            # Dividir pedidos pode chamar o Gemma (20–40 s na CPU): roda fora da thread que
+            # escuta o microfone, senão ele ficaria surdo nesse tempo.
+            threading.Thread(target=self.enfileirar, args=(comando,), daemon=True).start()
+
+    def enfileirar(self, comando):
+        try:
+            prioridade, texto = fila.detectar_prioridade(comando)
+            pedidos = fila.dividir_pedidos(texto)
+            with self.trava:
+                ocupado = bool(self.trabalhos)
+                if ARQ_MOTOR.exists():
+                    self.motor = ARQ_MOTOR.read_text(encoding='utf-8').strip() or 'claude'
+                for pedido in pedidos:
+                    fila.adicionar(pedido, prioridade=prioridade, motor=self.motor)
+                self.emitir_fila()
+            self.dizer(f'Anotei {len(pedidos)} tarefas.' if len(pedidos) > 1 else
+                       'Urgente, vou fazer agora.' if prioridade == 0 else
+                       'Anotei, está na fila.' if ocupado else 'Certo.')
+            self.acordar.set()
+        except Exception as e:
+            registrar('ERRO', f'Fila: {e}')
+            emitir(evento='erro', texto=f'Não consegui anotar o pedido: {e}')
 
     def ouvir_comando(self):
         audio = self.mic.gravar_fala()
@@ -337,7 +464,7 @@ class Assistente:
                 registrar("Você (texto)", cmd["texto"])
                 self.executar(cmd["texto"].strip())
             elif tipo == "cancelar":
-                self.cancelar()
+                self.cancelar(id=cmd.get('id'))
             elif tipo == "mudo":
                 self.mic.pausado = bool(cmd.get("valor"))
                 self.mic.limpar()
@@ -361,16 +488,22 @@ class Assistente:
 
     def sair(self):
         self.ativo = False
-        self.cancelado = True
-        proc = self.proc
-        if proc and proc.poll() is None:
-            subprocess.run(["taskkill", "/pid", str(proc.pid), "/T", "/F"],
-                           creationflags=subprocess.CREATE_NO_WINDOW)
+        with self.trava:
+            for trabalho in self.trabalhos.values():
+                trabalho['cancelado'] = True
+                proc = trabalho['proc']
+                if proc and proc.poll() is None:
+                    subprocess.run(['taskkill', '/pid', str(proc.pid), '/T', '/F'],
+                                   creationflags=subprocess.CREATE_NO_WINDOW)
         emitir(evento="saindo")
         self.mic.fechar()
         os._exit(0)  # pode ser chamado da thread que lê o app
 
     def rodar(self):
+        fila.recuperar()
+        self.emitir_fila()
+        threading.Thread(target=self.falar_fila, daemon=True).start()
+        threading.Thread(target=self.despachar, daemon=True).start()
         if IPC:
             threading.Thread(target=self.ler_app, daemon=True).start()
             threading.Thread(target=self.emitir_nivel, daemon=True).start()
