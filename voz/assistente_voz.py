@@ -31,6 +31,8 @@ from datetime import datetime
 from pathlib import Path
 
 import fila
+import backup
+import registro
 import agente_local
 import motores_cli
 import provedores
@@ -126,6 +128,8 @@ class Assistente:
         self.historicos_api = {}
         self.sessoes_cli = {}
         self.pendentes_api = {}
+        self.banco_falho = False
+        self.restauro_pendente = None  # nome do backup aguardando o "sim"
 
     @property
     def ocupado(self):
@@ -434,6 +438,27 @@ class Assistente:
     def executar(self, comando):
         """Trata comandos de controle ou dispara uma tarefa."""
         c = normalizar(comando)
+        if self.restauro_pendente:
+            nome, self.restauro_pendente = self.restauro_pendente, None
+            if re.match(r"(sim|pode|confirmo|restaura)\b", c):
+                self.restaurar(nome)
+                return
+            if self.banco_falho:
+                self.dizer("Ok, não restaurei.")
+                return
+        if re.fullmatch(r"(?:faz|faca|fazer)(?: um| o)? backup", c):
+            try:
+                caminho = backup.fazer_backup("pedido")
+                self.dizer(f"Backup salvo em {caminho}.")
+            except Exception as erro:
+                self.dizer(f"Não consegui fazer o backup: {erro}")
+            return
+        if re.fullmatch(r"(?:restaura|restaurar|recupera|recuperar)(?: o)?(?: ultimo)? backup", c):
+            self.oferecer_restauro()
+            return
+        if self.banco_falho:
+            self.dizer("O banco de dados está com falha. Diga: restaura o backup.")
+            return
         troca = TROCA_MOTOR.search(c)
         if troca and len(c.split()) <= 6:  # frase curta: é comando, não tarefa
             nome = troca.group(1)
@@ -563,12 +588,57 @@ class Assistente:
         self.mic.fechar()
         os._exit(0)  # pode ser chamado da thread que lê o app
 
+    def oferecer_restauro(self, motivo=""):
+        try:
+            ultimo = backup.ultimo_backup_integro()
+        except Exception:
+            ultimo = None
+        if not ultimo:
+            self.dizer(f"{motivo} Não encontrei um backup íntegro para restaurar.".strip())
+            return
+        self.restauro_pendente = ultimo['nome']
+        quando = datetime.fromisoformat(ultimo['criado']).strftime("%d/%m às %H:%M")
+        texto = (f"{motivo} Posso restaurar o backup de {quando}? "
+                 "Os dados atuais ficam guardados antes.").strip()
+        self.mensagem("secretario", texto)
+        self.dizer(texto)
+
+    def restaurar(self, nome):
+        with self.trava:
+            ocupado = bool(self.trabalhos)
+        if ocupado:
+            self.dizer("Tem tarefa em andamento. Cancele ou espere terminar antes de restaurar.")
+            return
+        try:
+            # O próprio motor segura a trava motor_ativo; por isso restaura por dentro.
+            resultado = backup.restaurar(nome, confirmado=True, pelo_motor=True)
+        except Exception as erro:
+            self.dizer(f"Não consegui restaurar: {erro}")
+            return
+        registrar("Sistema", f"backup {nome} restaurado; cópia de segurança: {resultado['seguranca']}")
+        self.dizer("Backup restaurado. Vou me reiniciar.", esperar=True)
+        emitir(evento="reiniciar", completo=False)
+        self.sair()
+
     def rodar(self):
-        self.emitir_motores()
-        fila.recuperar()
-        self.emitir_fila()
+        registro.preparar_banco()
+        integridade = backup.verificar_banco()
         threading.Thread(target=self.falar_fila, daemon=True).start()
-        threading.Thread(target=self.despachar, daemon=True).start()
+        if integridade != "ok":
+            # Modo recuperação: o motor continua vivo (sair faria o app reiniciá-lo em
+            # loop) e só aceita restaurar; a fila não roda porque depende do banco.
+            self.banco_falho = True
+            emitir(evento="erro", texto=f"Integridade do banco: {integridade}")
+            self.oferecer_restauro("O banco de dados apresentou falha.")
+        else:
+            try:
+                backup.backup_diario()
+            except Exception as erro:
+                emitir(evento="erro", texto=f"Não consegui fazer o backup diário: {erro}")
+            fila.recuperar()
+            self.emitir_fila()
+            threading.Thread(target=self.despachar, daemon=True).start()
+        self.emitir_motores()
         if IPC:
             threading.Thread(target=self.ler_app, daemon=True).start()
             threading.Thread(target=self.emitir_nivel, daemon=True).start()
@@ -588,4 +658,5 @@ if __name__ == "__main__":
     emitir(evento="estado", estado="carregando")
     import numpy as np
     transcrever(np.zeros(16000, dtype="float32"))  # carrega o modelo antes de começar
-    Assistente().rodar()
+    with backup.motor_ativo():
+        Assistente().rodar()

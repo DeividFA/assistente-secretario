@@ -8,6 +8,12 @@ from pathlib import Path
 BANCO = Path(__file__).resolve().parent / "secretario.db"
 
 
+def preparar_banco():
+    """Cria o banco inicial sem modificar um banco já existente."""
+    if not BANCO.exists():
+        _conectar(BANCO).close()
+
+
 def _conectar(banco):
     conexao = sqlite3.connect(banco, timeout=30)
     try:

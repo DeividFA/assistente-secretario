@@ -25,6 +25,7 @@ from mcp.server.fastmcp import FastMCP, Image
 from comum import CAPTURAS, Microfone, bip, falar as _falar, transcrever
 import delegacao
 import provedores
+import backup
 
 pyautogui.FAILSAFE = True  # mouse no canto superior esquerdo aborta qualquer ação
 pyautogui.PAUSE = 0.15
@@ -252,6 +253,26 @@ def focar_janela(titulo_parcial: str) -> str:
                 janela.activate()
             return f"janela em foco: {janela.title}"
     return "nenhuma janela encontrada com esse título"
+
+
+@mcp.tool()
+def fazer_backup(motivo: str = "pedido") -> str:
+    """Cria uma cópia verificada do SQLite e dos dados do secretário."""
+    return backup.fazer_backup(motivo)
+
+
+@mcp.tool()
+def listar_backups() -> list[dict]:
+    """Lista as cópias disponíveis, mais recentes primeiro."""
+    return backup.listar_backups()
+
+
+@mcp.tool()
+def restaurar_backup(nome: str = "") -> str:
+    """Explica como restaurar. A restauração em si é feita pelo motor de voz, que precisa
+    estar sem tarefas e pede a confirmação do Deivid."""
+    return ("Não restauro daqui: o motor de voz está usando o banco. Peça ao Deivid para "
+            "dizer ou digitar 'restaura o backup'; o motor mostra qual backup e pede confirmação.")
 
 
 if __name__ == "__main__":
