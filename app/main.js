@@ -11,6 +11,8 @@ const VOZ = path.join(__dirname, '..', 'voz');
 const PYTHON = path.join(VOZ, '.venv', 'Scripts', 'python.exe');
 const ICONES = path.join(__dirname, 'icones');
 const LEMBRETES = path.join(VOZ, 'lembretes.json');
+const COFRE = path.join(require('os').homedir(), 'Documents', 'Secretario'); // não usar getPath('documents'): aponta para o OneDrive
+const CONFIG_OBSIDIAN = path.join(app.getPath('appData'), 'obsidian', 'obsidian.json');
 
 let janela = null;
 let bandeja = null;
@@ -59,7 +61,7 @@ function atualizarBandeja() {
   bandeja.setContextMenu(Menu.buildFromTemplate([
     { label: 'Abrir Secretário', click: mostrar },
     { label: 'Microfone mudo', type: 'checkbox', checked: mudo, click: (i) => alternarMudo(i.checked) },
-    { label: 'Abrir memória (Obsidian)', click: () => shell.openExternal('obsidian://open?vault=Secretario') },
+    { label: 'Abrir memória (Obsidian)', click: abrirObsidian },
     { type: 'separator' },
     { label: 'Reiniciar motor de voz', click: () => { if (motor) motor.kill(); } },
     { label: 'Sair', click: () => { saindo = true; app.quit(); } },
@@ -75,6 +77,25 @@ function alternarMudo(valor) {
   enviarAoMotor({ cmd: 'mudo', valor });
   if (janela) janela.webContents.send('evento', { evento: 'mudo', valor });
   atualizarBandeja();
+}
+
+// O Obsidian só abre cofres que conhece; se ele "esqueceu" o do secretário, registra de novo.
+function abrirObsidian() {
+  try {
+    const config = JSON.parse(fs.readFileSync(CONFIG_OBSIDIAN, 'utf8'));
+    config.vaults = config.vaults || {};
+    const conhecido = Object.values(config.vaults).some((v) => path.resolve(v.path).toLowerCase() === COFRE.toLowerCase());
+    if (!conhecido) {
+      config.vaults['5ec7e7a7a1b2c3d4'] = { path: COFRE, ts: Date.now(), open: false };
+      fs.writeFileSync(CONFIG_OBSIDIAN, JSON.stringify(config));
+    }
+  } catch (erro) {
+    if (erro.code === 'ENOENT') {
+      fs.mkdirSync(path.dirname(CONFIG_OBSIDIAN), { recursive: true });
+      fs.writeFileSync(CONFIG_OBSIDIAN, JSON.stringify({ vaults: { '5ec7e7a7a1b2c3d4': { path: COFRE, ts: Date.now(), open: true } } }));
+    }
+  }
+  shell.openExternal('obsidian://open?vault=Secretario&file=' + encodeURIComponent('00 - Índice'));
 }
 
 function verificarLembretes() {
@@ -125,7 +146,7 @@ function iniciarMotor() {
 
 ipcMain.on('cmd', (_e, cmd) => {
   if (cmd.cmd === 'mudo') return alternarMudo(cmd.valor);
-  if (cmd.cmd === 'obsidian') return shell.openExternal('obsidian://open?vault=Secretario');
+  if (cmd.cmd === 'obsidian') return abrirObsidian();
   enviarAoMotor(cmd);
 });
 ipcMain.handle('estado', () => ({ estado: estadoAtual, mudo }));
