@@ -759,5 +759,230 @@ Junto com a Fase 2: (T19 ‖ T21 ‖ T25) → (T20 ‖ T22 ‖ T24) → T26 → 
   win32 falsas (restaura mesmo se a ação levantar erro); resolução do `alvo` (índice, nome,
   automation_id) com árvore falsa; ferramentas físicas recusam quando ele não para.
 
+---
+
+# Fase 8 — cuidar de si mesmo: backup, auto-reparo e instalação
+
+## T37 — Backup sólido do SQLite e dos dados do secretário
+- Arquivos: criar `voz/backup.py` e `voz/tests/test_backup.py`; `voz/config.py`,
+  `voz/assistente_voz.py`, `voz/sentidos_mcp.py`, `voz/registro.py`.
+- Fazer:
+  - `fazer_backup(motivo)`: cria `<pasta_backup>/AAAA-MM-DD_HHMMSS_<motivo>/` com
+    `secretario.db` copiado pela API `sqlite3.Connection.backup()` (cópia consistente com WAL e
+    com o motor rodando — nunca copiar o arquivo direto), `config.json`, `correcoes.json`,
+    `lembretes.json`, `motor.txt` (os que existirem) e `cofre.zip` do cofre do Obsidian (sem
+    `.obsidian/workspace*`). Roda `PRAGMA integrity_check` na cópia e grava `manifesto.json`
+    (sha256 e tamanho de cada arquivo, linhas por tabela, resultado da verificação). Se a
+    verificação falhar, apaga a pasta e levanta erro.
+  - Config `"pasta_backup"` (padrão `%USERPROFILE%\Backups\Secretario`) e
+    `"pasta_backup_extra"` (opcional, ex.: uma pasta do OneDrive, para ter cópia fora do PC):
+    o backup é copiado para as duas.
+  - Rotação: mantém 7 diários, 4 semanais e 6 mensais; backups com motivo `antes_reparo` ou
+    `antes_restaurar` ficam 30 dias.
+  - Quando: ao iniciar o motor, se o último backup tem mais de 24 h; antes de cada auto-reparo
+    (T36); antes de restaurar; e por pedido.
+  - `verificar_banco()` ao iniciar: `PRAGMA integrity_check` no banco ativo; se falhar, avisa
+    o Deivid e oferece restaurar o último backup íntegro.
+  - `listar_backups()`, `restaurar(nome)`: faz `fazer_backup("antes_restaurar")`, para as
+    escritas (o motor chama com a fila pausada), substitui o banco e os arquivos, e pede
+    reinício. Restaurar sempre exige confirmação do Deivid.
+  - As chaves de API ficam no Gerenciador de Credenciais do Windows e NÃO entram no backup
+    (o manifesto registra isso).
+  - Voz: "faz um backup" (regex no `executar`); MCP `fazer_backup`, `listar_backups`,
+    `restaurar_backup` (a ferramenta só restaura com `confirmado=true`).
+- Testes: backup de um banco temporário em WAL com escrita concorrente; manifesto; integridade
+  falha → pasta removida; rotação com datas falsas; restauração faz backup antes.
+
+## T36 — Auto-diagnóstico, relato de bugs e auto-reparo com aprovação
+- Depende de: T37. Arquivos: criar `voz/diagnostico.py`, `voz/reparo.py` e testes;
+  `voz/registro.py`, `voz/assistente_voz.py`, `voz/sentidos_mcp.py`, `voz/voz_prompt.md`,
+  `app/main.js`, `app/renderer.js`, `app/index.html`, `app/estilo.css`.
+- Captura de bugs (`diagnostico.py`):
+  - `sys.excepthook`, `threading.excepthook` e os `except` genéricos do motor chamam
+    `registrar_bug(origem, erro, traceback, contexto)`. Tabela `bugs` no SQLite: id,
+    assinatura (hash do tipo do erro + arquivo/função do último quadro do nosso código, sem
+    números de linha), tipo (bug|melhoria), resumo, traceback, contexto (pedido, motor,
+    ferramenta — sem chaves nem textos longos), primeira_vez, ultima_vez, ocorrencias, estado
+    (novo|informado|aprovado|corrigindo|corrigido|falhou|ignorado), diretriz, commit.
+  - O app (`main.js`) registra quedas do motor (código de saída, últimas 50 linhas do stderr)
+    em `voz/sinais/bug_<ts>.json`; o motor importa esses arquivos ao iniciar.
+  - Sintomas sem exceção, a partir da tabela `eventos`: o mesmo erro de motor 3 vezes em 1 h,
+    5 transcrições vazias seguidas, ferramenta falhando 3 vezes seguidas.
+  - `verificar_saude(completo=False)`: banco íntegro, cofre existe, Ollama responde, microfone
+    abre, espaço em disco > 2 GB; com `completo=True` também roda `pytest voz/tests -q`
+    (timeout 5 min). Leve ao iniciar; completo uma vez por dia quando ele estiver ocioso.
+- Informar e pedir diretriz:
+  - Bug novo (ou que passou de 3 ocorrências) → fala em uma frase, quando ele não estiver em
+    chamada nem no meio de uma tarefa: "Encontrei um problema: <resumo>. Quer que eu tente
+    corrigir? Se tiver alguma orientação, pode falar." Estado → informado. Não repetir o
+    mesmo aviso no mesmo dia.
+  - Painel "Problemas" na interface (ícone na barra lateral com contador): lista, detalhes
+    (resumo, quando, quantas vezes, traceback recolhido), campo "Orientação" e botões
+    "Corrigir", "Ignorar". Voz: "o que deu errado?", "corrige o problema", "anota uma
+    melhoria: …" (vira registro tipo melhoria). MCP `listar_bugs`, `detalhe_bug`,
+    `corrigir_bug(id, diretriz)` (só depois da aprovação dele na conversa).
+- Auto-reparo (`reparo.py`), só com aprovação explícita para aquele bug:
+  1. Recusa se o repositório tiver alterações não commitadas ou outro reparo rodando.
+  2. `backup.fazer_backup("antes_reparo")`; cria branch `reparo/<id>`.
+  3. Delega ao Codex (`motores_cli.executar("codex", …, pasta=repo)`) com: resumo, traceback,
+     contexto, a diretriz do Deivid e as regras — corrigir só esse problema, acrescentar um
+     teste que reproduz o bug, não mexer em dados do usuário (`secretario.db`, `config.json`,
+     `correcoes.json`, cofre, chaves), não fazer commit.
+  4. Roda `pytest voz/tests -q` e `node --check` nos .js. Passou → commit no branch, merge na
+     main (`--ff-only`), estado corrigido, grava o commit; diz "Corrigi <resumo>. Posso me
+     reiniciar para aplicar?". Falhou → volta para a main, apaga o branch, estado falhou (até
+     2 tentativas por bug) e conta o motivo em uma frase.
+  5. Proteção: o app marca a tag git `estavel` depois de 30 min do motor rodando sem queda. Se,
+     após um reparo, o motor cair 2 vezes em 5 min, o app faz `git revert` do commit do reparo,
+     reinicia e avisa o Deivid. Nunca `git push`.
+- Testes: assinatura estável (mesmo bug em linhas diferentes = mesma assinatura); contagem
+  e estados; sintomas a partir de eventos falsos; reparo com git em pasta temporária e executor
+  falso (sucesso → commit na main; testes falham → main intacta e branch apagado; repositório
+  sujo → recusa).
+
+## T38 — Instalação: baixar, instalar e configurar tudo sozinho
+- Depende de: todas as anteriores (instala o que existir). Arquivos: criar
+  `instalacao/instalar.ps1`, `instalacao/skill/SKILL.md` e `instalacao/agente/secretario.md`
+  (cópias versionadas; o revisor copia as atuais), `instalacao/cofre_modelo/` (esqueleto do
+  cofre sem dados pessoais), `voz/requirements.txt` (o revisor gera com versões fixas);
+  `voz/diagnostico.py` (modo `--instalacao`), `app/main.js`, `app/renderer.js`.
+- Também: procurar caminhos fixos com `deivi` no código e trocar por `Path.home()`,
+  `os.environ` ou caminhos relativos ao repositório (o nome "Deivid" nos textos pode ficar até
+  a T29 trocar pelo nome do perfil).
+- `instalar.ps1` (PowerShell 5.1, idempotente: cada passo verifica antes e só instala o que
+  falta; log em `instalacao\instalar.log`; tabela final ok/instalado/falhou/ação do usuário):
+  1. winget disponível. 2. Python 3.12, Node LTS, Git, Ollama e Obsidian via winget (ids
+     `Python.Python.3.12`, `OpenJS.NodeJS.LTS`, `Git.Git`, `Ollama.Ollama`,
+     `Obsidian.Obsidian`), atualizando o PATH da sessão depois.
+  3. venv em `voz\.venv` e `pip install -r requirements.txt` (se o ensurepip estiver quebrado,
+     usar a roda do pip que vem no Python: `Lib\ensurepip\_bundled\pip-*.whl`).
+  4. `npm ci` em `app\`. 5. `npm install -g @anthropic-ai/claude-code @openai/codex`.
+  6. MCPs no escopo do usuário: `claude mcp add -s user playwright -- npx @playwright/mcp@latest`
+     e `sentidos` apontando para o Python do venv e `voz\sentidos_mcp.py` (remove e adiciona
+     se o caminho mudou); `npx playwright install chromium`.
+  7. Copia skill e agente para `~\.claude\skills\secretario\` e `~\.claude\agents\` (se já
+     existe e é diferente, guarda a antiga como `.bak`).
+  8. Cofre: cria `Documents\Secretario` do modelo se não existir; registra no `obsidian.json`
+     somando ao que já existe (nunca substituir os cofres dele).
+  9. Modelos: `ollama pull gemma3:4b`, baixa o Whisper `small` (chamando o Python do venv) e,
+     com `-Voz faber`, a voz Piper. Flag `-SemModelos` pula este passo.
+  10. `config.json` a partir do `config.exemplo.json` se não existir.
+  11. Atalho na área de trabalho e iniciar com o Windows.
+  12. `python voz\diagnostico.py --instalacao` → verificação final.
+  - Logins e chaves NUNCA são automatizados: no fim, lista o que ele precisa fazer (`claude`
+    para entrar, `codex login`, chaves de API pela tela de Configurações).
+  - `-Verificar`: só confere e mostra a tabela, sem instalar nada.
+- App: botão "Verificar instalação" (e verificação ao iniciar) usa `diagnostico.py
+  --instalacao`; se faltar algo, avisa e oferece rodar o passo do `instalar.ps1` — instalar
+  programa sempre pede confirmação.
+- Verificação: o revisor roda `instalar.ps1 -Verificar` de verdade e checa o parse com
+  `[System.Management.Automation.Language.Parser]::ParseFile`.
+
+---
+
+# Fase 9 — Secretário no celular (Android, cérebro híbrido)
+
+Decisões do Deivid (27/10/2026): Android; cérebro híbrido (usa o secretário do PC quando
+alcançável, senão uma IA na nuvem com chave dele); gastos por voz/texto, foto de comprovante,
+leitura de notificações de compra e importação de CSV. Executa ações em apps, **nunca em apps
+de banco/finanças**. Cresce com o uso.
+
+Regras da fase: projeto em `celular/` (Kotlin, Jetpack Compose, minSdk 29, targetSdk 35,
+pacote `com.deivid.secretario`); APK instalado por fora da Play Store (uso pessoal). O revisor
+compila (`gradlew assembleDebug`) — o Codex não roda Gradle. Pré-requisitos no PC (o revisor
+instala com a confirmação do Deivid): JDK 17 e Android SDK command-line tools; Tailscale no PC e
+no celular para acesso fora de casa.
+
+## C1 — Ponte PC ↔ celular
+- Arquivos: criar `voz/ponte.py`, `voz/tests/test_ponte.py`; `voz/assistente_voz.py`,
+  `app/main.js`, `app/renderer.js`, `app/index.html`.
+- Servidor HTTP + WebSocket (pacote `websockets` ou `aiohttp`) dentro do motor, porta 8765,
+  escutando SÓ no IP do Tailscale (100.x) e no IP da rede local — nunca 0.0.0.0 em rede pública.
+- Pareamento: botão "Conectar celular" no app mostra um QR com `{host_lan, host_tailscale,
+  porta, token}`; token aleatório de 32 bytes por aparelho, guardado com hash no SQLite
+  (`aparelhos`: id, nome, hash, criado, ultimo_uso, revogado). Lista de aparelhos com "Revogar".
+- Endpoints (todos exigem `Authorization: Bearer`): WS `/eventos` (mesmos eventos do IPC:
+  mensagem, estado, fila, motores); `POST /comando` (texto, com `origem:"celular"`);
+  `POST /gastos` e `GET /gastos?desde=` (C5); `POST /memoria/fatos` (fatos aprendidos no
+  celular → `memoria.aprender`); `GET /memoria/contexto?q=` (`memoria.contexto`);
+  `POST /bugs` (T36); `GET /apk` (C9).
+- Pedidos vindos do celular entram na mesma fila (T18), com a resposta devolvida pelo WS
+  (e não falada no PC, a menos que ele esteja em casa e peça).
+- Limite de 60 requisições/min por aparelho; tudo registrado em `eventos`.
+- Testes: token válido/inválido/revogado, limite de taxa, endereço de escuta nunca 0.0.0.0.
+
+## C2 — App Android base: conversa, voz e roteador do cérebro
+- Arquivos: `celular/` (projeto Gradle completo com wrapper), README com como compilar.
+- Telas no estilo do app do PC (escuro, menta): conversa, botão de microfone, painel da fila,
+  Configurações (PC pareado via leitura do QR com CameraX/ML Kit; chave da IA na nuvem guardada
+  com EncryptedSharedPreferences/Android Keystore; motor da nuvem: Gemini, GPT, Grok,
+  OpenRouter — API compatível com OpenAI).
+- Voz: `SpeechRecognizer` pt-BR (offline quando disponível) e `TextToSpeech` do Android.
+  Acesso rápido: bloco nas Configurações rápidas, widget e atalho do app.
+- Roteador: se o PC responde em até 1,5 s → manda para o PC (C1); senão → IA na nuvem com o
+  catálogo de ações do celular (C3/C4) por chamada de função. Indicador "PC" / "Nuvem" na tela.
+- Histórico local em Room; fatos aprendidos ficam numa fila e sobem ao PC quando ele aparecer.
+
+## C3 — Ações por intents (sem Acessibilidade)
+- Abrir app; agenda: ler eventos (`CalendarContract`, inclui Google Agenda) — "o que tenho
+  amanhã?" — e criar evento (confirmação); alarme/timer; abrir mapa/rota; rascunho de
+  SMS/WhatsApp/e-mail (ele envia); compartilhar texto+imagem para um app (base das postagens).
+- Lembretes do celular sincronizados com os do PC (T5) pela ponte.
+
+## C4 — Operar apps com Acessibilidade (exceto banco)
+- `AccessibilityService`: lê a árvore da tela do app em primeiro plano (texto, ids, clicável,
+  editável) em formato compacto com índices; ações: tocar, preencher texto (`ACTION_SET_TEXT`),
+  rolar, voltar, gesto. Loop de ações com a IA (como o `agente_local` do PC), máx. 15 passos.
+- **Bloqueio de apps financeiros** (antes de qualquer leitura ou ação, e os eventos desses
+  apps são descartados sem ler): lista fixa de pacotes (Itaú, Bradesco, BB, Caixa, Santander,
+  Nubank, Inter, C6, PicPay, Mercado Pago, PagBank, Neon, Next, Original, BTG, XP, Rico,
+  Sicoob, Sicredi, Banrisul, Binance, carteiras de cripto…), mais heurística no nome do pacote
+  (bank, banco, pay, wallet, invest, cartao, credito, cripto) e janelas com `FLAG_SECURE`.
+  O Deivid pode acrescentar apps à lista, nunca remover os fixos.
+- Nunca lê nem preenche campos de senha (`isPassword`); não faz login, CAPTCHA nem códigos.
+- Confirmação antes de publicar, enviar mensagem, comprar, apagar ou aceitar termos.
+- Não atrapalhar: se ele tocar na tela, a automação pausa; botão flutuante "Parar".
+- README: no Android 13+, apps instalados por fora da loja precisam de "Permitir
+  configurações restritas" (Informações do app) antes de ligar a Acessibilidade.
+
+## C5 — Gastos
+- Room `gastos` (id, data, valor_centavos, descricao, estabelecimento, categoria, forma,
+  origem: voz|foto|notificacao|csv, confirmado), sincronizado com a tabela `gastos` do PC (C1)
+  e incluído no backup (T37).
+- Voz/texto: "gastei 45 reais no mercado ontem" → extração por regex para valor/data e IA para
+  categoria; mostra e confirma.
+- Foto: CameraX → texto com ML Kit no aparelho → IA extrai valor, data, estabelecimento.
+- Notificações (opcional, desligado por padrão): `NotificationListenerService` lê só
+  notificações de compra (valor em R$ + palavras como compra/aprovada/pix enviado) dos apps
+  que ele marcar; guarda só os campos extraídos, nunca o texto completo; nunca abre o app.
+- CSV: importação com mapeamento de colunas e detecção de duplicados.
+- Categorias aprendidas pelas correções dele; orçamento por categoria com aviso aos 80%;
+  "quanto gastei esse mês com mercado?"; o PC gera `Finanças/Gastos AAAA-MM.md` no cofre
+  (resumo, sem dados de cartão). Nunca paga nada, nem Pix, nem boleto.
+
+## C6 — Postagens
+- "Cria uma postagem sobre X para o LinkedIn/Instagram": a IA escreve na voz dele (perfil do
+  cofre), mostra o rascunho e a imagem escolhida da galeria; ao aprovar, abre o app pelo
+  compartilhamento (C3) e, com Acessibilidade (C4), preenche e para no botão Publicar
+  perguntando "Posso publicar?". Histórico das postagens no cofre (`Histórico/Postagens.md`).
+
+## C7 — Crescer com o uso
+- Receitas: cada sequência de ações em um app que deu certo e foi confirmada vira uma receita
+  (app, intenção, passos com seletores por texto/id). Na próxima vez, a receita é reutilizada
+  (mais rápido e barato); se a tela mudou, a IA refaz e a receita é atualizada.
+- Sugestões: com o histórico de uso, ele propõe atalhos e rotinas ("toda segunda você pede a
+  agenda; quer que eu leia às 8h?") — só ativa com o "sim" dele.
+- Pedidos que ele ainda não sabe fazer viram "melhoria" na lista do PC (T36).
+
+## C8 — Compilar, instalar e atualizar
+- `celular/` com Gradle wrapper; assinatura com keystore local (fora do git; senha no
+  Gerenciador de Credenciais). O PC serve o APK mais novo em `GET /apk`; o app avisa "há uma
+  versão nova" e abre o instalador do Android. Primeira instalação: QR com link do APK ou
+  `adb install` por depuração sem fio.
+- Instalador (T38): passos opcionais JDK 17, Android SDK command-line tools e Tailscale.
+
 ## Ordem de execução atualizada
-(T26 ‖ T30) → T23 → T33 → T35 → T34 → T28 → T16 → T17 → T31 → T29 → T32 → T27.
+(T26 ‖ T30) → T23 → T37 → T33 → T35 → T34 → T36 → T16 → C1 → C2 → C3 → C4 → C5 → C6 → C7 → C8
+→ T28 → T17 → T31 → T29 → T32 → T27 → T38.
+(T38 fica por último de propósito: o instalador precisa cobrir tudo o que existir; o modo
+`-Verificar` pode ser antecipado se for útil.)
