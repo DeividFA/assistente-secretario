@@ -98,12 +98,12 @@ def test_termos_do_vocabulario_nao_sao_duvidosos():
 def test_palavras_calibracao_filtra_titulos_ruins(tmp_path):
     import json, padrao_fala, vocabulario
     (tmp_path / '.secretario').mkdir()
-    titulos = ['00 - Índice', 'LinkedIn carrossel - 2026-10-27', 'Bíblia', 'Casa', 'Montes Claros',
+    titulos = ['00 - Índice', 'LinkedIn carrossel - 2026-10-27', 'Bíblia', 'Casa', 'Ouro Preto',
                'Uma frase longa demais aqui']
     (tmp_path / '.secretario' / 'indice.json').write_text(
         json.dumps({'notas': [{'titulo': t} for t in titulos]}), encoding='utf-8')
     extras = padrao_fala.palavras_calibracao(tmp_path)[len(vocabulario.FIXOS):]
-    assert extras == ['Bíblia', 'Montes Claros']
+    assert extras == ['Bíblia', 'Ouro Preto']
 
 
 def test_calibracao_registra_data_e_preserva_nota(tmp_path):

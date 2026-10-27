@@ -12,3 +12,6 @@ __pycache__/
 voz/correcoes.json
 voz/modelos_voz/
 voz/config.json
+
+# travas de processo do backup
+voz/*.lock
