@@ -282,7 +282,7 @@ Cofre: `Path.home() / "Documents" / "Secretario"` (sempre aceitar `cofre=` como 
   gravados automaticamente (não precisa reler o cofre inteiro a cada pedido).
 - Verificação: `py_compile`; testes existentes passam.
 
-## T17 — Gemma com ações no modo local
+## T17 — Gemma com ações no modo local (FEITA dentro da T23: tarefa_provedor usa agente_local com memória, pendência e confirmar)
 - Arquivos: `voz/assistente_voz.py`.
 - Fazer: `tarefa_local` passa a usar `agente_local.executar(comando, historico, memoria=ctx)`
   em vez da conversa pura. Emite `{"evento":"ferramenta","nome":...}` para cada passo. Se vier
