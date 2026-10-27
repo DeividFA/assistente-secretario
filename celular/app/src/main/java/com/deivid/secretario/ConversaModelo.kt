@@ -19,6 +19,8 @@ class ConversaModelo(aplicacao: Application) : AndroidViewModel(aplicacao) {
     val enviando = MutableStateFlow(false)
     val aviso = MutableStateFlow<String?>(null)
     val falar = MutableSharedFlow<String>(extraBufferCapacity = 16)
+    val interfaceAcoes = InterfaceAcoes()
+    private val lembretes = LembretesCelular(aplicacao)
     private val pc = ClientePc({ evento ->
         viewModelScope.launch {
             when (evento) {
@@ -33,7 +35,9 @@ class ConversaModelo(aplicacao: Application) : AndroidViewModel(aplicacao) {
             }
         }
     }, { conectado.value = it })
-    private val roteador = Roteador(pc, ClienteNuvem(configuracao::nuvem, RegistroAcoes(), dados::recentes))
+    private val registroAcoes = acoesCelular(AmbienteAcoes(aplicacao, interfaceAcoes::confirmar,
+        interfaceAcoes::permitir, interfaceAcoes::abrir, lembretes))
+    private val roteador = Roteador(pc, ClienteNuvem(configuracao::nuvem, registroAcoes, dados::recentes))
     private var observacao: Job? = null
 
     fun iniciar() {
@@ -43,6 +47,7 @@ class ConversaModelo(aplicacao: Application) : AndroidViewModel(aplicacao) {
                 try {
                     val pareamento = configuracao.pareamento()
                     if (pareamento != null && withTimeoutOrNull(1500) { pc.conectar(pareamento) } == true) {
+                        lembretes.sincronizar(pc)
                         val pendentes = dados.fatos()
                         if (pendentes.isNotEmpty()) {
                             pc.sincronizar(pendentes.map { it.texto })

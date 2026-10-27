@@ -28,6 +28,7 @@ import provedores
 import backup
 import vozes
 import segundo_plano
+import lembretes as armazenamento_lembretes
 
 pyautogui.FAILSAFE = True  # mouse no canto superior esquerdo aborta qualquer ação
 pyautogui.PAUSE = 0.15
@@ -100,10 +101,7 @@ def reiniciar_secretario(completo: bool = False) -> str:
 @mcp.tool()
 def listar_lembretes() -> list[dict]:
     """Lista os lembretes agendados, incluindo os já feitos."""
-    try:
-        return json.loads(LEMBRETES.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return []
+    return armazenamento_lembretes.listar(LEMBRETES)
 
 
 @mcp.tool()
@@ -115,11 +113,7 @@ def lembrete(quando: str, texto: str) -> str:
         return "Data inválida. Use AAAA-MM-DDTHH:MM."
     if data.isoformat(timespec="minutes") != quando:
         return "Data inválida. Use AAAA-MM-DDTHH:MM."
-    lembretes = listar_lembretes()
-    lembretes.append({"quando": quando, "texto": texto, "feito": False})
-    temporario = LEMBRETES.with_suffix(".json.tmp")
-    temporario.write_text(json.dumps(lembretes, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporario.replace(LEMBRETES)
+    armazenamento_lembretes.adicionar(quando, texto, arquivo=LEMBRETES)
     return f"Lembrete agendado para {quando}."
 
 

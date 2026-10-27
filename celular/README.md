@@ -1,8 +1,8 @@
-# Secretário Android — C2
+# Secretário Android — C2/C3
 
 Base pessoal em Kotlin/Compose, tema escuro/menta, Android 10 ou superior.
-Somente a C2 foi implementada. `AcaoCelular` define o contrato futuro e
-`RegistroAcoes` começa vazio; não há intents de apps nem Acessibilidade.
+`RegistroAcoes` expõe as ações C3 à nuvem por chamadas de função.
+Não há Acessibilidade.
 
 ## Compilar e instalar (revisor)
 
@@ -69,8 +69,8 @@ ignorados. A fila exibida é a da ponte, sem ações de cancelar ou reordenar na
 
 Se o PC não conectar no prazo, a mensagem segue à API OpenAI compatível em
 `<base>/chat/completions`. O indicador mostra o último cérebro usado. Há suporte
-ao catálogo `tools` e aos retornos `tool_calls`, mas nenhuma ferramenta é enviada
-com o registro vazio. Não há execução arbitrária de nomes retornados pela IA.
+ao catálogo `tools` e aos retornos `tool_calls`, com escolha somente de nomes
+registrados. Não há execução arbitrária de nomes retornados pela IA.
 Falha de POST após conectar não repete o comando na nuvem: o PC pode já tê-lo
 aceitado. O app informa o erro para o usuário conferir a fila antes de repetir.
 
@@ -111,3 +111,29 @@ por KSP em `app/schemas/` na primeira compilação do revisor.
   aparelho). Use só em rede confiável; fora de casa, conecte pelo Tailscale, que criptografa.
 - O QR de pareamento expira em 10 minutos se não for usado. Revogue aparelhos perdidos no
   app do PC ("Conectar celular" → lista de aparelhos).
+
+## Ações C3
+
+Na nuvem, há ferramentas para abrir app pelo pacote, ler/criar eventos nos
+calendários do Android (incluindo Google Agenda), alarme/timer, mapa/rota,
+rascunhos de SMS/WhatsApp/e-mail e compartilhamento de texto/imagem `content://`.
+O usuário confirma na interface antes de criar evento ou preparar rascunho;
+o envio/publicação fica no app de destino. Cancelar não executa a ação.
+Apps financeiros são recusados na ação de abertura. App ausente e permissão
+negada retornam erro à IA. O compartilhamento abre o seletor do Android.
+
+Agenda solicita READ_CALENDAR/WRITE_CALENDAR ao usar a ação, conforme necessário.
+SET_ALARM é uma permissão normal concedida pelo Android na instalação, sem
+diálogo de runtime; é verificada apenas ao usar alarme/timer. Não se pede acesso
+especial a alarmes exatos. Datas aceitam ISO local, “amanhã às 15h”, “hoje às
+15:30” e “segunda que vem” (próxima ocorrência estritamente futura, 9h se não
+houver horário). O fuso é o do aparelho.
+
+Lembretes ficam em armazenamento privado persistente, com fila de envio e cópia
+dos lembretes do PC. Com o app aberto e PC pareado disponível, GET/POST
+`/lembretes` sincronizam a cada dez segundos. IDs tornam reenvios idempotentes;
+a marca `feito` do PC é preservada. O PC continua responsável pelas notificações
+T5; não há agendador de notificações Android em segundo plano. A ferramenta
+`listar_lembretes` inclui pendentes locais e a última cópia do PC. O roteamento
+da C2 permanece: PC disponível recebe o pedido; as ferramentas locais são usadas
+pelo caminho da nuvem.

@@ -273,7 +273,7 @@ def test_autenticacao_compara_hash_com_tempo_constante(tmp_path, monkeypatch):
     asyncio.run(verificar())
 
 
-def test_falha_ao_abrir_porta_fecha_sites_anteriores(tmp_path, monkeypatch):
+def test_falha_em_um_ip_mantem_os_outros_e_fecha_ao_desligar(tmp_path, monkeypatch):
     async def verificar():
         p, _, _ = preparar(tmp_path)
         eventos, abertos = [], []
@@ -291,10 +291,36 @@ def test_falha_ao_abrir_porta_fecha_sites_anteriores(tmp_path, monkeypatch):
                 abertos.remove(self.host)
                 self.runner._unreg_site(self)
         monkeypatch.setattr(ponte.web, 'TCPSite', Site)
-        with pytest.raises(OSError, match='Porta ocupada'):
-            await p.servir()
+        # Um adaptador com problema (ex.: IP fixo de cabo desconectado) não derruba a ponte.
+        tarefa = asyncio.create_task(p.servir())
+        for _ in range(100):
+            if p.ativa:
+                break
+            await asyncio.sleep(0.02)
+        assert p.ativa and abertos == ['192.168.1.2'] and p.ips == ['192.168.1.2']
+        p.parar_evento.set()
+        await asyncio.wait_for(tarefa, 5)
         assert not abertos and not p.ativa
-        assert not any(ev['ativa'] for ev in eventos)
+        assert eventos[-1]['ativa'] is False
+    asyncio.run(verificar())
+
+
+def test_nenhum_ip_disponivel_desiste(tmp_path, monkeypatch):
+    async def verificar():
+        p, _, _ = preparar(tmp_path)
+        p.notificar = lambda **ev: None
+        monkeypatch.setattr(ponte, 'detectar_ips', lambda: ['192.168.1.2'])
+
+        class Site:
+            def __init__(self, runner, host, port):
+                pass
+
+            async def start(self):
+                raise OSError('Porta ocupada')
+        monkeypatch.setattr(ponte.web, 'TCPSite', Site)
+        with pytest.raises(RuntimeError, match='nenhum IP'):
+            await asyncio.wait_for(p.servir(), 5)
+        assert not p.ativa
     asyncio.run(verificar())
 
 
@@ -315,3 +341,45 @@ def test_qr_nao_usado_expira(tmp_path, monkeypatch):
             r = await cliente.get("/memoria/contexto?q=x", headers={"Authorization": "Bearer " + token})
             return r.status
     assert asyncio.run(rodar()) == 401
+
+
+def test_lembretes_autenticacao_validacao_e_repeticao(tmp_path, monkeypatch):
+    async def verificar():
+        p, headers, _ = preparar(tmp_path)
+        arquivo = tmp_path / 'lembretes.json'
+        monkeypatch.setattr(ponte.lembretes, 'ARQUIVO', arquivo)
+        async with TestClient(TestServer(p.criar_app())) as cliente:
+            assert (await cliente.get('/lembretes')).status == 401
+            assert (await cliente.post('/lembretes', json={})).status == 401
+            resposta = await cliente.get('/lembretes', headers=headers)
+            assert await resposta.json() == {'lembretes': []}
+            item = dict(id='celular-1', quando='2026-11-02T15:00', texto='Consulta')
+            for _ in range(2):
+                resposta = await cliente.post('/lembretes', headers=headers, json=item)
+                assert resposta.status == 201
+                assert (await resposta.json())['feito'] is False
+            # O formato continua compatível com o leitor de notificações do PC.
+            itens = json.loads(arquivo.read_text(encoding='utf-8'))
+            assert itens == [dict(item, feito=False)]
+            itens[0]['feito'] = True
+            arquivo.write_text(json.dumps(itens), encoding='utf-8')
+            await cliente.post('/lembretes', headers=headers, json=item)
+            resposta = await cliente.get('/lembretes', headers=headers)
+            assert await resposta.json() == {'lembretes': itens}
+            for invalido in ([], {}, dict(item, quando='amanhã'), dict(item, quando='2026-02-30T15:00'),
+                             dict(item, texto=''), dict(item, id=23), dict(item, texto='Outro')):
+                assert (await cliente.post('/lembretes', headers=headers, json=invalido)).status == 400
+            assert json.loads(arquivo.read_text(encoding='utf-8')) == itens
+            await p.revogar(1)
+            assert (await cliente.get('/lembretes', headers=headers)).status == 401
+    asyncio.run(verificar())
+
+
+def test_lembretes_compartilham_formato_mcp(tmp_path):
+    arquivo = tmp_path / 'lembretes.json'
+    arquivo.write_text(json.dumps([dict(quando='2026-11-01T09:00', texto='PC', feito=False)]), encoding='utf-8')
+    ponte.lembretes.adicionar('2026-11-02T10:00', 'Celular', 'id-1', arquivo)
+    itens = ponte.lembretes.listar(arquivo)
+    assert len(itens) == 2
+    assert itens[0]['texto'] == 'PC'
+    assert itens[1]['texto'] == 'Celular'

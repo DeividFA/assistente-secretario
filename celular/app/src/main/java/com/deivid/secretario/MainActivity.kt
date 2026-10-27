@@ -52,6 +52,31 @@ class MainActivity : ComponentActivity() {
                 }
                 LaunchedEffect(pedidoVoz.value) { if (pedidoVoz.value > 0) ouvir() }
                 LaunchedEffect(Unit) { modelo.falar.collect { voz.dizer(it) } }
+                val pedidoAcao by modelo.interfaceAcoes.pedido.collectAsStateWithLifecycle()
+                var permissaoEmCurso by remember { mutableStateOf<PedidoAcao.Permissao?>(null) }
+                val permissaoAcao = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { resultado ->
+                    permissaoEmCurso?.let { pedido -> pedido.resposta.complete(pedido.nomes.all { resultado[it] == true }) }
+                    permissaoEmCurso = null
+                }
+                LaunchedEffect(pedidoAcao) {
+                    when (val pedido = pedidoAcao) {
+                        is PedidoAcao.Permissao -> if (permissaoEmCurso !== pedido) {
+                            permissaoEmCurso = pedido
+                            permissaoAcao.launch(pedido.nomes.toTypedArray())
+                        }
+                        is PedidoAcao.Abrir -> if (!pedido.resposta.isCompleted) {
+                            try { startActivity(pedido.intent); pedido.resposta.complete(Unit) }
+                            catch (erro: Exception) { pedido.resposta.completeExceptionally(erro) }
+                        }
+                        else -> Unit
+                    }
+                }
+                (pedidoAcao as? PedidoAcao.Confirmacao)?.let { pedido ->
+                    AlertDialog(onDismissRequest = { pedido.resposta.complete(false) },
+                        title = { Text("Confirmar ação") }, text = { Text(pedido.texto) },
+                        confirmButton = { TextButton(onClick = { pedido.resposta.complete(true) }) { Text("Confirmar") } },
+                        dismissButton = { TextButton(onClick = { pedido.resposta.complete(false) }) { Text("Cancelar") } })
+                }
                 Tela(modelo, ::ouvir)
             }
         }

@@ -25,6 +25,7 @@ from qrcode.image.pil import PilImage
 import diagnostico
 import memoria
 import registro
+import lembretes
 
 APARELHO = web.RequestKey('aparelho', int)
 # Um QR mostrado na tela e nunca usado não pode virar chave eterna.
@@ -169,6 +170,8 @@ class Ponte:
         app.router.add_post('/memoria/fatos', self.fatos)
         app.router.add_get('/memoria/contexto', self.contexto)
         app.router.add_post('/bugs', self.bug)
+        app.router.add_get('/lembretes', self.listar_lembretes)
+        app.router.add_post('/lembretes', self.criar_lembrete)
         for metodo, caminho in [('POST', '/gastos'), ('GET', '/gastos'), ('GET', '/apk')]:
             app.router.add_route(metodo, caminho, self.futuro)
         return app
@@ -212,6 +215,18 @@ class Ponte:
         id = await asyncio.to_thread(diagnostico.registrar_bug, 'celular',
                                     RuntimeError(dados['texto']), banco=self.banco)
         return web.json_response(dict(id=id), status=201 if id is not None else 503)
+
+    async def listar_lembretes(self, request):
+        itens = await asyncio.to_thread(lembretes.listar, lembretes.ARQUIVO)
+        return web.json_response(dict(lembretes=itens))
+
+    async def criar_lembrete(self, request):
+        dados = await request.json()
+        if not isinstance(dados, dict) or not isinstance(dados.get('quando'), str):
+            raise web.HTTPBadRequest()
+        item = await asyncio.to_thread(lembretes.adicionar, dados['quando'], dados.get('texto'),
+                                       dados.get('id'), lembretes.ARQUIVO)
+        return web.json_response(item, status=201)
 
     async def futuro(self, request):
         raise web.HTTPNotImplemented()

@@ -120,6 +120,20 @@ class ClientePc(private val receber: (EventoPc) -> Unit, private val estadoConex
                 .toString().toRequestBody(tipoJson)).build())
     }
 
+    suspend fun enviarLembrete(item: JsonObject) {
+        val pc = atual ?: error("PC desconectado")
+        cliente.executar(Request.Builder().url("http://$host:${pc.porta}/lembretes")
+            .header("Authorization", "Bearer ${pc.token}")
+            .post(item.toString().toRequestBody(tipoJson)).build())
+    }
+
+    suspend fun lerLembretes(): JsonArray {
+        val pc = atual ?: error("PC desconectado")
+        val resposta = cliente.executar(Request.Builder().url("http://$host:${pc.porta}/lembretes")
+            .header("Authorization", "Bearer ${pc.token}").build())
+        return Json.parseToJsonElement(resposta).jsonObject.getValue("lembretes").jsonArray
+    }
+
     fun desligar() {
         val anterior = socket
         socket = null; atual = null; host = null
@@ -141,7 +155,7 @@ class ClienteNuvem(
         require(config.chave.isNotBlank()) { "Configure a chave da IA na nuvem" }
         val mensagens = mutableListOf<JsonObject>(buildJsonObject {
             put("role", "system")
-            put("content", "Você é o Secretário. Responda em português. Só execute ações presentes nas ferramentas disponíveis.")
+            put("content", "Você é o Secretário. Responda em português. Só execute ações presentes nas ferramentas disponíveis. Agora: ${java.time.LocalDateTime.now()}. Datas usam o fuso ${java.time.ZoneId.systemDefault()}. Nunca opere apps financeiros. Não diga que concluiu uma ação cancelada ou com erro. Mensagens são rascunhos: o usuário envia.")
         })
         val anteriores = historico().sortedBy { it.id }.toMutableList()
         // O comando atual já foi persistido antes do roteamento.
@@ -179,9 +193,12 @@ class ClienteNuvem(
             for (chamada in chamadas) {
                 val o = chamada.jsonObject
                 val funcao = o.getValue("function").jsonObject
-                val acao = registro.acoes.singleOrNull { it.nome == funcao.getValue("name").jsonPrimitive.content }
-                val resultado = if (acao == null) "Ação indisponível nesta versão." else acao.executar(
-                    Json.parseToJsonElement(funcao.getValue("arguments").jsonPrimitive.content).jsonObject)
+                val acao = registro.escolher(funcao.getValue("name").jsonPrimitive.content)
+                val resultado = try {
+                    if (acao == null) "Ação indisponível nesta versão." else acao.executar(
+                        Json.parseToJsonElement(funcao.getValue("arguments").jsonPrimitive.content).jsonObject)
+                } catch (e: CancellationException) { throw e }
+                catch (e: Exception) { "A ação falhou: ${e.message}" }
                 mensagens.add(buildJsonObject {
                     put("role", "tool"); put("tool_call_id", o.getValue("id")); put("content", resultado)
                 })
