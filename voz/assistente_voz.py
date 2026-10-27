@@ -46,7 +46,7 @@ PROMPT_LOCAL = ("Você é o secretário pessoal do Deivid e responde por voz. Fa
                 "e não consegue mexer no computador, na internet nem em arquivos; se pedirem isso, diga que "
                 "para essas tarefas ele deve dizer: secretário, usar Claude.")
 TROCA_MOTOR = re.compile(r"^(usa|usar|use|muda|mudar|troca|trocar|volta|voltar|liga|ligar)\b.*\b"
-                         r"(gemma|gema|jema|claude|cloud|clode|claud|clod)\b")
+                         r"(gem\w*|jem\w*|claud\w*|claude\w*|cloud\w*|clod\w*)\b")  # o Whisper às vezes ouve "gemão", "cloud"...
 
 NOMES_FERRAMENTAS = {
     "mcp__playwright__": "navegador",
@@ -79,6 +79,7 @@ def emitir(**evento):
 
 
 def registrar(quem, texto):
+    from registro import evento
     linha = f"{datetime.now():%Y-%m-%d %H:%M:%S}  {quem}: {texto}"
     if not IPC:
         print(linha, flush=True)
@@ -86,6 +87,10 @@ def registrar(quem, texto):
         LOG.replace(LOG.with_name("log_voz.1.txt"))
     with LOG.open("a", encoding="utf-8") as f:
         f.write(linha + "\n")
+    try:
+        evento(quem, texto)
+    except Exception as e:  # o log no banco nunca pode derrubar o motor
+        print(f"registro SQLite falhou: {e}", file=sys.stderr)
 
 
 def nome_ferramenta(nome):
@@ -142,39 +147,56 @@ class Assistente:
     def tarefa_local(self, comando):
         """Conversa com o Gemma pelo Ollama, sem ferramentas."""
         import urllib.request
-        self.historico_local.append({"role": "user", "content": comando})
-        corpo = json.dumps({"model": MODELO_LOCAL, "stream": True, "keep_alive": "30m",
-                            "messages": [{"role": "system", "content": PROMPT_LOCAL}]
-                            + self.historico_local[-20:]}).encode("utf-8")
-        pedido = urllib.request.Request(OLLAMA_URL, data=corpo, headers={"Content-Type": "application/json"})
-        partes = []
+        from registro import inicio_tarefa, fim_tarefa
+        tarefa_id = inicio_tarefa(comando, "gemma")
+        status = "erro"
+        resposta = ""
         try:
-            with urllib.request.urlopen(pedido, timeout=300) as resp:
-                for linha in resp:
-                    if self.cancelado:
-                        self.historico_local.pop()
-                        return
-                    ev = json.loads(linha)
-                    partes.append(ev.get("message", {}).get("content", ""))
-                    if ev.get("done"):
-                        break
-        except Exception as e:  # Ollama fechado, modelo ausente etc.
-            self.historico_local.pop()
-            registrar("ERRO", f"Ollama: {e}")
-            emitir(evento="erro", texto=f"Ollama: {e}")
-            self.dizer("Não consegui falar com o Gemma. Veja se o Ollama está aberto, "
-                       "ou diga secretário, usar Claude.")
-            return
-        resposta = "".join(partes).strip() or "Pronto."
-        self.historico_local.append({"role": "assistant", "content": resposta})
-        self.mensagem("secretario", resposta)
-        self.dizer(resposta)
-        self.conversa_ate = time.monotonic() + JANELA_CONVERSA
+            self.historico_local.append({"role": "user", "content": comando})
+            corpo = json.dumps({"model": MODELO_LOCAL, "stream": True, "keep_alive": "30m",
+                                "messages": [{"role": "system", "content": PROMPT_LOCAL}]
+                                + self.historico_local[-20:]}).encode("utf-8")
+            pedido = urllib.request.Request(OLLAMA_URL, data=corpo, headers={"Content-Type": "application/json"})
+            partes = []
+            try:
+                with urllib.request.urlopen(pedido, timeout=300) as resp:
+                    for linha in resp:
+                        if self.cancelado:
+                            self.historico_local.pop()
+                            status = "cancelada"
+                            return
+                        ev = json.loads(linha)
+                        partes.append(ev.get("message", {}).get("content", ""))
+                        if ev.get("done"):
+                            break
+            except Exception as e:  # Ollama fechado, modelo ausente etc.
+                resposta = str(e)
+                self.historico_local.pop()
+                registrar("ERRO", f"Ollama: {e}")
+                emitir(evento="erro", texto=f"Ollama: {e}")
+                self.dizer("Não consegui falar com o Gemma. Veja se o Ollama está aberto, "
+                           "ou diga secretário, usar Claude.")
+                return
+            if self.cancelado:
+                self.historico_local.pop()
+                status = "cancelada"
+                return
+            resposta = "".join(partes).strip() or "Pronto."
+            status = "ok"
+            self.historico_local.append({"role": "assistant", "content": resposta})
+            self.mensagem("secretario", resposta)
+            self.dizer(resposta)
+            self.conversa_ate = time.monotonic() + JANELA_CONVERSA
+        finally:
+            fim_tarefa(tarefa_id, "cancelada" if self.cancelado else status, resposta)
 
     def tarefa(self, comando):
+        from registro import inicio_tarefa, fim_tarefa
         self.ocupado = True
         self.cancelado = False
         self.estado("pensando")
+        if ARQ_MOTOR.exists():  # permite trocar o motor editando o arquivo, sem reiniciar
+            self.motor = ARQ_MOTOR.read_text(encoding="utf-8").strip() or "claude"
         if self.motor == "gemma":
             try:
                 self.tarefa_local(comando)
@@ -182,6 +204,11 @@ class Assistente:
                 self.ocupado = False
                 self.estado_ocioso()
             return
+        tarefa_id = inicio_tarefa(comando, "claude")
+        status = "erro"
+        ferramentas = []
+        resposta = None
+        erro = ""
         try:
             args = [CLAUDE, "-p", comando, "--output-format", "stream-json", "--verbose",
                     "--permission-mode", "auto", "--append-system-prompt", PROMPT_VOZ]
@@ -205,12 +232,18 @@ class Assistente:
                 if ev.get("type") == "assistant":
                     for bloco in ev.get("message", {}).get("content", []):
                         if bloco.get("type") == "tool_use":
+                            nome = bloco.get("name", "")
+                            if nome and nome not in ferramentas:
+                                ferramentas.append(nome)
                             emitir(evento="ferramenta", nome=nome_ferramenta(bloco.get("name", "")))
                 elif ev.get("type") == "result":
                     resposta = ev.get("result")
+                    status = "erro" if ev.get("is_error") else "ok"
             self.proc.wait()
             if self.cancelado:
                 return
+            if self.proc.returncode:
+                status = "erro"
             if resposta is None:
                 registrar("ERRO", erro.strip()[-500:])
                 emitir(evento="erro", texto=erro.strip()[-500:] or "O Claude não respondeu.")
@@ -220,10 +253,16 @@ class Assistente:
             self.mensagem("secretario", resposta)
             self.dizer(resposta)
             self.conversa_ate = time.monotonic() + JANELA_CONVERSA
+        except Exception as e:
+            erro = str(e)
+            status = "erro"
+            raise
         finally:
             self.proc = None
             self.ocupado = False
             self.estado_ocioso()
+            fim_tarefa(tarefa_id, "cancelada" if self.cancelado else status,
+                       resposta if resposta is not None else erro.strip()[-2000:], ferramentas)
 
     def cancelar(self):
         if self.proc and self.proc.poll() is None:
@@ -243,7 +282,7 @@ class Assistente:
         c = normalizar(comando)
         troca = TROCA_MOTOR.search(c)
         if troca and len(c.split()) <= 6 and not self.ocupado:  # frase curta: é comando, não tarefa
-            self.trocar_motor("gemma" if troca.group(2) in ("gemma", "gema", "jema") else "claude")
+            self.trocar_motor("gemma" if troca.group(2).startswith(("gem", "jem")) else "claude")
         elif c.startswith(("cancela", "para", "pare")):
             self.cancelar()
         elif c.startswith(("desligar", "desliga", "encerrar", "encerra")):

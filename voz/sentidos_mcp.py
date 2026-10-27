@@ -84,13 +84,12 @@ def falar(texto: str) -> str:
     return "falado"
 
 
-@mcp.tool()
-def foto_camera(camera: int = 0):
-    """Tira uma foto com a webcam e devolve a imagem. Use SOMENTE quando o usuário pedir
-    explicitamente para usar a câmera nesta tarefa. Câmeras detectadas: 0 e 2."""
+def salvar_foto(camera: int = 0) -> Path:
+    """Salva uma foto da webcam e devolve seu caminho."""
     cap = cv2.VideoCapture(camera, cv2.CAP_DSHOW)
     if not cap.isOpened():
-        return f"Câmera {camera} não abriu. Tente outro número (0, 1, 2)."
+        cap.release()
+        raise RuntimeError(f"Câmera {camera} não abriu. Tente outro número (0, 1, 2).")
     try:
         for _ in range(8):  # deixa a exposição automática estabilizar
             cap.read()
@@ -99,16 +98,14 @@ def foto_camera(camera: int = 0):
     finally:
         cap.release()
     if not ok:
-        return "Não consegui capturar a imagem."
+        raise RuntimeError("Não consegui capturar a imagem.")
     caminho = _arquivo("camera")
     cv2.imwrite(str(caminho), quadro, [cv2.IMWRITE_JPEG_QUALITY, 85])
-    return [f"Foto salva em {caminho}", Image(path=str(caminho))]
+    return caminho
 
 
-@mcp.tool()
-def captura_tela(monitor: int = 1):
-    """Tira um print da tela (monitor 1 = principal) e devolve a imagem. As coordenadas
-    que você ler nesta imagem podem ser passadas direto para clicar()."""
+def salvar_tela(monitor: int = 1) -> Path:
+    """Salva a tela e mantém a escala usada pelas ações do mouse."""
     with mss.mss() as sct:
         mon = sct.monitors[monitor]
         img = np.array(sct.grab(mon))[:, :, :3]
@@ -119,8 +116,27 @@ def captura_tela(monitor: int = 1):
     _escala.update(fator=fator, x0=mon["left"], y0=mon["top"])
     caminho = _arquivo("tela")
     cv2.imwrite(str(caminho), img, [cv2.IMWRITE_JPEG_QUALITY, 80])
-    return [f"Tela {largura}x{altura}, imagem {img.shape[1]}x{img.shape[0]}. Salva em {caminho}",
-            Image(path=str(caminho))]
+    _escala["descricao"] = f"Tela {largura}x{altura}, imagem {img.shape[1]}x{img.shape[0]}. Salva em {caminho}"
+    return caminho
+
+
+@mcp.tool()
+def foto_camera(camera: int = 0):
+    """Tira uma foto com a webcam e devolve a imagem. Use SOMENTE quando o usuário pedir
+    explicitamente para usar a câmera nesta tarefa. Câmeras detectadas: 0 e 2."""
+    try:
+        caminho = salvar_foto(camera)
+    except RuntimeError as erro:
+        return str(erro)
+    return [f"Foto salva em {caminho}", Image(path=str(caminho))]
+
+
+@mcp.tool()
+def captura_tela(monitor: int = 1):
+    """Tira um print da tela (monitor 1 = principal) e devolve a imagem. As coordenadas
+    que você ler nesta imagem podem ser passadas direto para clicar()."""
+    caminho = salvar_tela(monitor)
+    return [_escala["descricao"], Image(path=str(caminho))]
 
 
 def _real(x, y):
