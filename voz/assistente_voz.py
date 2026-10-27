@@ -37,6 +37,16 @@ JANELA_CONVERSA = 15  # segundos após uma resposta em que dá para responder se
 LOG = BASE / "log_voz.txt"
 PROMPT_VOZ = (BASE / "voz_prompt.md").read_text(encoding="utf-8")
 CLAUDE = shutil.which("claude") or str(Path.home() / ".local" / "bin" / "claude.exe")
+# Motor do cérebro: "claude" (nuvem, com ferramentas) ou "gemma" (local via Ollama, só conversa).
+ARQ_MOTOR = BASE / "motor.txt"
+OLLAMA_URL = "http://localhost:11434/api/chat"
+MODELO_LOCAL = "gemma3:4b"
+PROMPT_LOCAL = ("Você é o secretário pessoal do Deivid e responde por voz. Fale em português do Brasil, "
+                "de forma curta e natural, em 1 a 3 frases, sem markdown nem listas. Você roda localmente "
+                "e não consegue mexer no computador, na internet nem em arquivos; se pedirem isso, diga que "
+                "para essas tarefas ele deve dizer: secretário, usar Claude.")
+TROCA_MOTOR = re.compile(r"^(usa|usar|use|muda|mudar|troca|trocar|volta|voltar|liga|ligar)\b.*\b"
+                         r"(gemma|gema|jema|claude|cloud|clode|claud|clod)\b")
 
 NOMES_FERRAMENTAS = {
     "mcp__playwright__": "navegador",
@@ -95,6 +105,8 @@ class Assistente:
         self.silencio = False  # não falar as respostas (equivalente ao "ensurdecer" do Discord)
         self.conversa_ate = 0.0
         self.ativo = True
+        self.motor = ARQ_MOTOR.read_text(encoding="utf-8").strip() if ARQ_MOTOR.exists() else "claude"
+        self.historico_local = []
 
     def estado(self, estado):
         emitir(evento="estado", estado=estado)
@@ -120,10 +132,56 @@ class Assistente:
             self.mic.mudo = False
             self.estado_ocioso()
 
+    def trocar_motor(self, motor):
+        self.motor = motor
+        ARQ_MOTOR.write_text(motor, encoding="utf-8")
+        nome = "Gemma, local" if motor == "gemma" else "Claude, na nuvem"
+        self.mensagem("sistema", f"Motor: {nome}.")
+        self.dizer(f"Ok, agora estou usando o {nome}.")
+
+    def tarefa_local(self, comando):
+        """Conversa com o Gemma pelo Ollama, sem ferramentas."""
+        import urllib.request
+        self.historico_local.append({"role": "user", "content": comando})
+        corpo = json.dumps({"model": MODELO_LOCAL, "stream": True, "keep_alive": "30m",
+                            "messages": [{"role": "system", "content": PROMPT_LOCAL}]
+                            + self.historico_local[-20:]}).encode("utf-8")
+        pedido = urllib.request.Request(OLLAMA_URL, data=corpo, headers={"Content-Type": "application/json"})
+        partes = []
+        try:
+            with urllib.request.urlopen(pedido, timeout=300) as resp:
+                for linha in resp:
+                    if self.cancelado:
+                        self.historico_local.pop()
+                        return
+                    ev = json.loads(linha)
+                    partes.append(ev.get("message", {}).get("content", ""))
+                    if ev.get("done"):
+                        break
+        except Exception as e:  # Ollama fechado, modelo ausente etc.
+            self.historico_local.pop()
+            registrar("ERRO", f"Ollama: {e}")
+            emitir(evento="erro", texto=f"Ollama: {e}")
+            self.dizer("Não consegui falar com o Gemma. Veja se o Ollama está aberto, "
+                       "ou diga secretário, usar Claude.")
+            return
+        resposta = "".join(partes).strip() or "Pronto."
+        self.historico_local.append({"role": "assistant", "content": resposta})
+        self.mensagem("secretario", resposta)
+        self.dizer(resposta)
+        self.conversa_ate = time.monotonic() + JANELA_CONVERSA
+
     def tarefa(self, comando):
         self.ocupado = True
         self.cancelado = False
         self.estado("pensando")
+        if self.motor == "gemma":
+            try:
+                self.tarefa_local(comando)
+            finally:
+                self.ocupado = False
+                self.estado_ocioso()
+            return
         try:
             args = [CLAUDE, "-p", comando, "--output-format", "stream-json", "--verbose",
                     "--permission-mode", "auto", "--append-system-prompt", PROMPT_VOZ]
@@ -173,19 +231,27 @@ class Assistente:
             self.proc.kill()
             self.mensagem("sistema", "Tarefa cancelada.")
             self.dizer("Tarefa cancelada.")
+        elif self.ocupado and self.motor == "gemma":
+            self.cancelado = True  # tarefa_local para no próximo pedaço da resposta
+            self.mensagem("sistema", "Tarefa cancelada.")
+            self.dizer("Tarefa cancelada.")
         else:
             self.dizer("Não tem nada rodando.")
 
     def executar(self, comando):
         """Trata comandos de controle ou dispara uma tarefa."""
         c = normalizar(comando)
-        if c.startswith(("cancela", "para", "pare")):
+        troca = TROCA_MOTOR.search(c)
+        if troca and len(c.split()) <= 6 and not self.ocupado:  # frase curta: é comando, não tarefa
+            self.trocar_motor("gemma" if troca.group(2) in ("gemma", "gema", "jema") else "claude")
+        elif c.startswith(("cancela", "para", "pare")):
             self.cancelar()
         elif c.startswith(("desligar", "desliga", "encerrar", "encerra")):
             self.dizer("Até logo.")
             self.sair()
         elif c.startswith("nova conversa"):
             self.sessao = None
+            self.historico_local = []
             emitir(evento="nova_conversa")
             self.dizer("Ok, conversa nova.")
         elif self.ocupado:
