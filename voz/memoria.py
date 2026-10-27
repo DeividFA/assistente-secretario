@@ -78,7 +78,8 @@ def ler_nota(caminho):
                 if paragrafo:
                     break
                 continue
-            if re.match(r"^\s*(?:#|[-*+]\s|\d+\.\s|>)", linha):
+            # Títulos, listas, citações e tabelas não servem de resumo.
+            if re.match(r"^\s*(?:#|[-*+]\s|\d+\.\s|>|\|)", linha):
                 if paragrafo:
                     break
                 continue
@@ -127,16 +128,30 @@ def _carregar_indice(cofre):
     return json.loads(caminho.read_text(encoding="utf-8"))
 
 
+def _raiz(palavra):
+    """Singular aproximado, para "domingos" achar "domingo" (sem dicionário)."""
+    if len(palavra) > 5 and palavra.endswith(("oes", "aes")):
+        return palavra[:-3] + "ao"
+    if len(palavra) > 4 and palavra.endswith("s"):
+        return palavra[:-1]
+    return palavra
+
+
+def _raizes(texto):
+    return {_raiz(p) for p in normalizar(texto).split() if len(p) >= 4 and p not in STOPWORDS}
+
+
 def _buscar(texto, indice, limite):
     texto = normalizar(texto)
-    palavras = {p for p in texto.split() if len(p) >= 4 and p not in STOPWORDS}
+    palavras = _raizes(texto)
     pontos = {}
     for nota in indice["notas"]:
         termos = {normalizar(nome) for nome in [nota["titulo"], *nota["aliases"]]}
         total = sum(3 for termo in termos if termo and
                     re.search(r"(?<!\w)" + re.escape(termo) + r"(?!\w)", texto))
-        palavras_nota = set(" ".join(termos).split())
-        total += len(palavras & palavras_nota)
+        total += len(palavras & _raizes(" ".join(termos)))
+        # O resumo também conta, com peso menor que título e apelidos.
+        total += 0.5 * len(palavras & _raizes(nota["resumo"]) - _raizes(" ".join(termos)))
         if total:
             pontos[nota["caminho"]] = total
     por_caminho = {nota["caminho"]: nota for nota in indice["notas"]}

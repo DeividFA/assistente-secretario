@@ -41,6 +41,8 @@ import provedores
 import config
 import dispositivos
 import vozes
+import memoria
+import extrator
 from vocabulario import ativacao_tolerante
 
 from comum import BASE, Microfone, bip, falar, normalizar, texto_para_fala, transcrever
@@ -157,6 +159,26 @@ class Assistente:
 
     def emitir_fila(self):
         emitir(evento="fila", tarefas=fila.listar())
+
+    def preparar_memoria(self):
+        try:
+            memoria.preparar_cofre()
+            memoria.indexar()
+        except Exception as erro:
+            registrar("ERRO", f"Inicialização da memória: {erro}")
+
+    def aprender_resposta(self, comando, resposta):
+        def aprender():
+            try:
+                memoria.registrar_diario(comando, resposta)
+                conhecimento = extrator.extrair(comando, resposta)
+                notas = memoria.aprender(conhecimento)
+                if notas:
+                    emitir(evento="memoria", notas=notas)
+            except Exception as erro:
+                registrar("ERRO", f"Aprendizado da memória: {erro}")
+
+        threading.Thread(target=aprender, daemon=True).start()
 
     def despachar(self):
         while self.ativo:
@@ -397,6 +419,7 @@ class Assistente:
             status = "erro" if resposta == agente_local.DESISTENCIA else "ok"
             self.mensagem("secretario", resposta)
             self.dizer(resposta)
+            self.aprender_resposta(comando, resposta)
             self.conversa_ate = time.monotonic() + JANELA_CONVERSA
         finally:
             trabalho['proc'] = None
@@ -413,7 +436,6 @@ class Assistente:
             raise ValueError("Motor desconhecido.")
         ctx = ""
         try:
-            import memoria
             ctx = memoria.contexto(comando)
         except Exception as e:
             diagnostico.registrar_bug("motor", e, e.__traceback__,
@@ -423,8 +445,7 @@ class Assistente:
         if motor != "claude":
             self.tarefa_provedor(comando, motor, ctx)
             return
-        if ctx:
-            comando = ctx + "\n\nPedido: " + comando
+        pedido = ctx + "\n\nPedido: " + comando if ctx else comando
         tarefa_id = inicio_tarefa(comando, "claude")
         status = "erro"
         ferramentas = []
@@ -432,7 +453,7 @@ class Assistente:
         resposta = None
         erro = ""
         try:
-            args = motores_cli.resolver_executavel(CLAUDE) + ["-p", comando, "--output-format", "stream-json", "--verbose",
+            args = motores_cli.resolver_executavel(CLAUDE) + ["-p", pedido, "--output-format", "stream-json", "--verbose",
                     "--permission-mode", "auto", "--append-system-prompt", PROMPT_VOZ]
             trabalho = _contexto.trabalho
             if trabalho['sessao']:
@@ -488,6 +509,7 @@ class Assistente:
             resposta = resposta or "Pronto."
             self.mensagem("secretario", resposta)
             self.dizer(resposta)
+            self.aprender_resposta(comando, resposta)
             self.conversa_ate = time.monotonic() + JANELA_CONVERSA
         except Exception as e:
             diagnostico.registrar_bug("motor", e, e.__traceback__,
@@ -977,6 +999,7 @@ class Assistente:
 
     def rodar(self):
         global JANELA_CONVERSA
+        self.preparar_memoria()
         JANELA_CONVERSA = float(self.config_mic.get("janela_conversa", 15))
         self.consultar_microfone()
         threading.Thread(target=self.vigiar_microfone, daemon=True).start()
