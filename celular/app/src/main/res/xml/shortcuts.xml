@@ -1,0 +1,7 @@
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="voz" android:enabled="true" android:icon="@drawable/ic_secretario" android:shortcutShortLabel="@string/atalho_voz">
+        <intent android:action="android.intent.action.VIEW" android:targetPackage="com.deivid.secretario" android:targetClass="com.deivid.secretario.MainActivity">
+            <extra android:name="ouvir" android:value="true" />
+        </intent>
+    </shortcut>
+</shortcuts>

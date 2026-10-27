@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">Secretário</string>
+    <string name="atalho_voz">Falar com Secretário</string>
+    <style name="Theme.Secretario" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#171A20</item>
+        <item name="android:navigationBarColor">#171A20</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>
