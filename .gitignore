@@ -6,5 +6,6 @@ capturas/
 voz/lembretes.json
 voz/log_voz.1.txt
 voz/motor.txt
+voz/sinais/
 voz/secretario.db*
 __pycache__/

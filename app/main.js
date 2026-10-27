@@ -11,6 +11,7 @@ const VOZ = path.join(__dirname, '..', 'voz');
 const PYTHON = path.join(VOZ, '.venv', 'Scripts', 'python.exe');
 const ICONES = path.join(__dirname, 'icones');
 const LEMBRETES = path.join(VOZ, 'lembretes.json');
+const SINAIS = path.join(VOZ, 'sinais');
 const COFRE = path.join(require('os').homedir(), 'Documents', 'Secretario'); // não usar getPath('documents'): aponta para o OneDrive
 const CONFIG_OBSIDIAN = path.join(app.getPath('appData'), 'obsidian', 'obsidian.json');
 
@@ -32,6 +33,26 @@ function reiniciarMotor() {
 let saindo = false;
 let estadoAtual = 'carregando';
 let mudo = false;
+
+function reiniciarSecretario(completo) {
+  if (saindo) return;
+  if (!completo) return reiniciarMotor();
+  saindo = true;
+  matarMotor();
+  app.relaunch();
+  app.exit(0);
+}
+
+function verificarReinicio() {
+  const arquivo = path.join(SINAIS, 'reiniciar');
+  try {
+    const sinal = fs.readFileSync(arquivo, 'utf8').trim();
+    fs.unlinkSync(arquivo);
+    reiniciarSecretario(sinal === 'completo');
+  } catch (erro) {
+    if (erro.code !== 'ENOENT') console.error('Não foi possível ler o sinal de reinício:', erro);
+  }
+}
 
 if (!app.requestSingleInstanceLock()) app.quit();
 app.on('second-instance', mostrar);
@@ -136,6 +157,7 @@ function iniciarMotor() {
   readline.createInterface({ input: motor.stdout }).on('line', (linha) => {
     let ev;
     try { ev = JSON.parse(linha); } catch { return; }
+    if (ev.evento === 'reiniciar') reiniciarSecretario(ev.completo === true);
     if (ev.evento === 'estado') { estadoAtual = ev.estado; atualizarBandeja(); }
     if (ev.evento === 'mensagem' && ev.autor === 'secretario' && janela && !janela.isVisible()) {
       const n = new Notification({ title: 'Secretário', body: ev.texto.slice(0, 200), icon: path.join(ICONES, 'app.png') });
@@ -176,6 +198,13 @@ app.whenReady().then(() => {
   bandeja.on('click', mostrar);
   atualizarBandeja();
   iniciarMotor();
+  fs.mkdirSync(SINAIS, { recursive: true });
+  const vigia = fs.watch(SINAIS, (_evento, arquivo) => {
+    if (!arquivo || arquivo.toString() === 'reiniciar') verificarReinicio();
+  });
+  vigia.on('error', (erro) => console.error('Não foi possível vigiar os sinais:', erro));
+  app.on('will-quit', () => vigia.close());
+  verificarReinicio();
   setInterval(verificarLembretes, 30000);
 
   // Ctrl+Shift+Espaço: falar sem dizer "secretário". Ctrl+Shift+S: abre/esconde a janela.

@@ -10,7 +10,7 @@ Modos:
 
 Comandos falados de controle (depois de "secretário"):
   "cancela" / "para"   interrompe a tarefa   ·  "nova conversa"  começa outra sessão
-  "desligar"           encerra o motor
+  "desligar"           encerra o motor   ·  "reinicia" / "reinicia tudo"  reinicia motor/app
 
 Comandos do app (stdin, uma linha JSON cada):
   {"cmd":"texto","texto":"..."}  {"cmd":"cancelar"}  {"cmd":"mudo","valor":true}
@@ -265,9 +265,11 @@ class Assistente:
                        resposta if resposta is not None else erro.strip()[-2000:], ferramentas)
 
     def cancelar(self):
-        if self.proc and self.proc.poll() is None:
+        proc = self.proc
+        if proc and proc.poll() is None:
             self.cancelado = True
-            self.proc.kill()
+            subprocess.run(["taskkill", "/pid", str(proc.pid), "/T", "/F"],
+                           creationflags=subprocess.CREATE_NO_WINDOW)
             self.mensagem("sistema", "Tarefa cancelada.")
             self.dizer("Tarefa cancelada.")
         elif self.ocupado and self.motor == "gemma":
@@ -285,6 +287,10 @@ class Assistente:
             self.trocar_motor("gemma" if troca.group(2).startswith(("gem", "jem")) else "claude")
         elif c.startswith(("cancela", "para", "pare")):
             self.cancelar()
+        elif re.fullmatch(r"(?:se )?reinici(?:a|ar|e)(?: (?:tudo|o app|o aplicativo|o motor))?", c.strip()):
+            self.dizer("Reiniciando.")
+            emitir(evento="reiniciar", completo=bool(re.search(r"\b(tudo|app|aplicativo)\b", c)))
+            self.sair()
         elif c.startswith(("desligar", "desliga", "encerrar", "encerra")):
             self.dizer("Até logo.")
             self.sair()
@@ -355,8 +361,11 @@ class Assistente:
 
     def sair(self):
         self.ativo = False
-        if self.proc and self.proc.poll() is None:
-            self.proc.kill()
+        self.cancelado = True
+        proc = self.proc
+        if proc and proc.poll() is None:
+            subprocess.run(["taskkill", "/pid", str(proc.pid), "/T", "/F"],
+                           creationflags=subprocess.CREATE_NO_WINDOW)
         emitir(evento="saindo")
         self.mic.fechar()
         os._exit(0)  # pode ser chamado da thread que lê o app

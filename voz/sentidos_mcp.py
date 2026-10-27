@@ -37,6 +37,17 @@ def _arquivo(prefixo):
 
 
 @mcp.tool()
+def reiniciar_secretario(completo: bool = False) -> str:
+    """Reinicia o motor do secretário; completo=True reinicia também o app."""
+    sinais = Path(__file__).resolve().parent / "sinais"
+    sinais.mkdir(parents=True, exist_ok=True)
+    temporario = sinais / "reiniciar.tmp"
+    temporario.write_text("completo" if completo else "motor", encoding="utf-8")
+    temporario.replace(sinais / "reiniciar")
+    return "Reinício solicitado."
+
+
+@mcp.tool()
 def listar_lembretes() -> list[dict]:
     """Lista os lembretes agendados, incluindo os já feitos."""
     try:
