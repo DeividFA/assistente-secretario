@@ -14,6 +14,8 @@ from pathlib import Path
 import numpy as np
 import sounddevice as sd
 
+import config
+
 BASE = Path(__file__).resolve().parent
 CAPTURAS = BASE.parent / "capturas"
 CAPTURAS.mkdir(exist_ok=True)
@@ -43,7 +45,8 @@ class Microfone:
     da fala e a próxima pausa."""
 
     def __init__(self, dispositivo=None):
-        dispositivo = dispositivo if dispositivo is not None else os.environ.get("SECRETARIO_MIC")
+        dispositivo = dispositivo if dispositivo is not None else os.environ.get(
+            "SECRETARIO_MIC", config.carregar()["microfone"])
         if isinstance(dispositivo, str) and dispositivo.isdigit():
             dispositivo = int(dispositivo)
         self.fila = queue.Queue()
@@ -119,7 +122,7 @@ def transcrever(audio):
     global _modelo
     if _modelo is None:
         from faster_whisper import WhisperModel
-        nome = os.environ.get("SECRETARIO_WHISPER", "small")
+        nome = os.environ.get("SECRETARIO_WHISPER", config.carregar()["modelo_whisper"])
         _modelo = WhisperModel(nome, device="cpu", compute_type="int8")
     segmentos, _ = _modelo.transcribe(
         audio, language="pt", beam_size=1, condition_on_previous_text=False,
@@ -149,7 +152,8 @@ def falar(texto, esperar=True):
     """Fala o texto com a voz pt-BR do Windows. Roda em outro processo para poder ser
     interrompida (proc.kill())."""
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
-    velocidade = os.environ.get("SECRETARIO_VELOCIDADE_FALA", "190")
+    velocidade = str(os.environ.get(
+        "SECRETARIO_VELOCIDADE_FALA", config.carregar()["velocidade_fala"]))
     proc = subprocess.Popen([sys.executable, "-c", _FALA, velocidade], stdin=subprocess.PIPE,
                             env=env, creationflags=subprocess.CREATE_NO_WINDOW)
     proc.stdin.write(texto.encode("utf-8"))

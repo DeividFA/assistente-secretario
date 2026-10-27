@@ -1,0 +1,7 @@
+{
+    "microfone": null,
+    "modelo_whisper": "small",
+    "velocidade_fala": 190,
+    "janela_conversa": 15,
+    "palavra_ativacao": "secretário"
+}
