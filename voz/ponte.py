@@ -26,6 +26,7 @@ import diagnostico
 import memoria
 import registro
 import lembretes
+import gastos
 
 APARELHO = web.RequestKey('aparelho', int)
 # Um QR mostrado na tela e nunca usado não pode virar chave eterna.
@@ -172,7 +173,9 @@ class Ponte:
         app.router.add_post('/bugs', self.bug)
         app.router.add_get('/lembretes', self.listar_lembretes)
         app.router.add_post('/lembretes', self.criar_lembrete)
-        for metodo, caminho in [('POST', '/gastos'), ('GET', '/gastos'), ('GET', '/apk')]:
+        app.router.add_post('/gastos', self.receber_gastos)
+        app.router.add_get('/gastos', self.listar_gastos)
+        for metodo, caminho in [('GET', '/apk')]:
             app.router.add_route(metodo, caminho, self.futuro)
         return app
 
@@ -230,6 +233,18 @@ class Ponte:
 
     async def futuro(self, request):
         raise web.HTTPNotImplemented()
+
+    async def receber_gastos(self, request):
+        dados = await request.json()
+        if not isinstance(dados, dict) or set(dados) != {'gastos'}:
+            raise web.HTTPBadRequest()
+        ids = await asyncio.to_thread(gastos.receber, request[APARELHO], dados['gastos'], self.banco)
+        return web.json_response(dict(ids=ids))
+
+    async def listar_gastos(self, request):
+        itens = await asyncio.to_thread(gastos.listar, request[APARELHO],
+                                        request.query.get('desde', ''), self.banco)
+        return web.json_response(dict(gastos=itens))
 
     async def publicar(self, evento):
         for ws, aparelho in list(self.sockets.items()):

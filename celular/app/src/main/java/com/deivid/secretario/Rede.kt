@@ -140,6 +140,34 @@ class ClientePc(private val receber: (EventoPc) -> Unit, private val estadoConex
         anterior?.cancel()
         estadoConexao(false)
     }
+
+    suspend fun enviarGastos(itens: List<GastoLocal>): List<String> {
+        val pc = atual ?: error("PC desconectado")
+        val resposta = cliente.executar(Request.Builder().url("http://$host:${pc.porta}/gastos")
+            .header("Authorization", "Bearer ${pc.token}")
+            .post(buildJsonObject { put("gastos", JsonArray(itens.map { it.json() })) }.toString().toRequestBody(tipoJson)).build())
+        return Json.parseToJsonElement(resposta).jsonObject.getValue("ids").jsonArray.map { it.jsonPrimitive.content }
+    }
+
+    suspend fun lerGastos(): List<GastoLocal> {
+        val pc = atual ?: error("PC desconectado")
+        val resposta = cliente.executar(Request.Builder().url("http://$host:${pc.porta}/gastos")
+            .header("Authorization", "Bearer ${pc.token}").build())
+        return Json.parseToJsonElement(resposta).jsonObject.getValue("gastos").jsonArray.map {
+            val o = it.jsonObject
+            GastoLocal(o.getValue("id").jsonPrimitive.content, o.getValue("data").jsonPrimitive.content,
+                o.getValue("valor_centavos").jsonPrimitive.long, o.getValue("descricao").jsonPrimitive.content,
+                o.getValue("estabelecimento").jsonPrimitive.content, o.getValue("categoria").jsonPrimitive.content,
+                o.getValue("forma").jsonPrimitive.content, o.getValue("origem").jsonPrimitive.content,
+                o.getValue("confirmado").jsonPrimitive.boolean, true)
+        }
+    }
+}
+
+fun GastoLocal.json() = buildJsonObject {
+    put("id", id); put("data", data); put("valor_centavos", valor_centavos); put("descricao", descricao)
+    put("estabelecimento", estabelecimento); put("categoria", categoria); put("forma", forma)
+    put("origem", origem); put("confirmado", confirmado)
 }
 
 class ClienteNuvem(
@@ -149,6 +177,25 @@ class ClienteNuvem(
 ) : PortaNuvem {
     private val cliente = OkHttpClient.Builder().callTimeout(60, TimeUnit.SECONDS)
         .retryOnConnectionFailure(false).build()
+
+    suspend fun extrairGasto(texto: String, foto: Boolean): JsonObject {
+        val config = configuracao()
+        require(config.chave.isNotBlank()) { "Configure a IA para extrair o comprovante" }
+        val corpo = buildJsonObject {
+            put("model", config.modelo)
+            put("messages", buildJsonArray {
+                add(buildJsonObject { put("role", "system"); put("content", "Extraia um gasto. Responda só JSON com categoria (Mercado, Casa, Transporte, Saúde, Lazer ou Outros)" +
+                    (if (foto) ", valor_centavos (inteiro positivo), data (AAAA-MM-DD), estabelecimento (nome curto). Hoje: ${java.time.LocalDate.now()}. Nunca inclua dados de cartão, conta, CPF nem texto do comprovante." else ".")) })
+                add(buildJsonObject { put("role", "user"); put("content", texto.take(12000)) })
+            })
+        }
+        val resposta = cliente.executar(Request.Builder().url(config.base.trimEnd('/') + "/chat/completions")
+            .header("Authorization", "Bearer ${config.chave}").post(corpo.toString().toRequestBody(tipoJson)).build())
+        val conteudo = Json.parseToJsonElement(resposta).jsonObject.getValue("choices").jsonArray.first()
+            .jsonObject.getValue("message").jsonObject.getValue("content").jsonPrimitive.content
+            .trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        return Json.parseToJsonElement(conteudo).jsonObject
+    }
 
     override suspend fun responder(texto: String): String {
         val config = configuracao()

@@ -78,7 +78,7 @@ def test_comando_ws_memoria_bugs_e_validacao(tmp_path, monkeypatch):
                 assert (await cliente.post(caminho, headers=headers, json=[])).status == 400
                 assert (await cliente.post(caminho, headers={**headers, 'Content-Type': 'application/json'},
                                           data='{')).status == 400
-            assert (await cliente.post('/gastos', headers=headers)).status == 501
+            assert (await cliente.post('/gastos', headers=headers, json={})).status == 400
             await p.revogar(1)
             assert (await ws.receive(timeout=2)).type == WSMsgType.CLOSE
             assert (await cliente.post('/comando', headers=headers, json={'texto': 'x'})).status == 401

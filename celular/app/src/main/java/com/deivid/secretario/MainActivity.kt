@@ -95,6 +95,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun Tela(modelo: ConversaModelo, ouvir: () -> Unit) {
     var configuracoes by remember { mutableStateOf(false) }
+    var gastos by remember { mutableStateOf(false) }
     var texto by remember { mutableStateOf("") }
     var fato by remember { mutableStateOf("") }
     val mensagens by modelo.mensagens.collectAsStateWithLifecycle()
@@ -110,11 +111,14 @@ private fun Tela(modelo: ConversaModelo, ouvir: () -> Unit) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding().imePadding().padding(16.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Secretário · $cerebro", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
-            TextButton(onClick = { configuracoes = !configuracoes }) { Text(if (configuracoes) "Conversa" else "Config.") }
+            TextButton(onClick = { configuracoes = !configuracoes; gastos = false }) { Text(if (configuracoes) "Conversa" else "Config.") }
         }
         Text("PC ${if (conectado) "conectado" else "desconectado"} · $estado", color = MaterialTheme.colorScheme.onSurface)
+        TextButton(onClick = { gastos = !gastos; configuracoes = false }) { Text(if (gastos) "Voltar à conversa" else "Gastos") }
         aviso?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
-        if (configuracoes) {
+        if (gastos) {
+            TelaGastos(modelo, Modifier.weight(1f))
+        } else if (configuracoes) {
             Configuracoes(modelo, fatos, Modifier.weight(1f))
         } else {
             LazyColumn(state = rolagem, modifier = Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -143,6 +147,9 @@ private fun Tela(modelo: ConversaModelo, ouvir: () -> Unit) {
                 TextButton(onClick = { modelo.aprender(fato); fato = "" }, enabled = fato.isNotBlank()) { Text("Guardar") }
             }
         }
+    }
+    if (!gastos && modelo.rascunhoGasto.collectAsStateWithLifecycle().value != null) {
+        LaunchedEffect(Unit) { gastos = true; configuracoes = false }
     }
 }
 

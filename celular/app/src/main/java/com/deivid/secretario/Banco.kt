@@ -3,6 +3,28 @@ package com.deivid.secretario
 import android.content.Context
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
+
+@Entity(tableName = "gastos")
+data class GastoLocal(
+    @PrimaryKey val id: String = java.util.UUID.randomUUID().toString(),
+    val data: String, val valor_centavos: Long, val descricao: String,
+    val estabelecimento: String, val categoria: String, val forma: String,
+    val origem: String, val confirmado: Boolean, val sincronizado: Boolean = false
+)
+
+@Dao
+interface DadosGastos {
+    @Query("SELECT * FROM gastos ORDER BY data DESC, id") fun observar(): Flow<List<GastoLocal>>
+    @Query("SELECT * FROM gastos ORDER BY data,id") suspend fun todos(): List<GastoLocal>
+    @Query("SELECT * FROM gastos WHERE sincronizado=0 LIMIT 50") suspend fun pendentes(): List<GastoLocal>
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun inserir(gasto: GastoLocal)
+    @Update suspend fun atualizar(gasto: GastoLocal)
+    @Query("UPDATE gastos SET sincronizado=1 WHERE id IN (:ids)") suspend fun sincronizados(ids: List<String>)
+    @Query("SELECT COUNT(*) FROM gastos WHERE data=:data AND valor_centavos=:valor AND estabelecimento=:local AND origem=:origem")
+    suspend fun duplicados(data: String, valor: Long, local: String, origem: String): Int
+}
 
 @Entity(tableName = "mensagens")
 data class MensagemLocal(
@@ -27,10 +49,17 @@ interface Dados {
     @Query("DELETE FROM fatos_pendentes WHERE id IN (:ids)") suspend fun confirmar(ids: List<Long>)
 }
 
-@Database(entities = [MensagemLocal::class, FatoPendente::class], version = 1, exportSchema = true)
+@Database(entities = [MensagemLocal::class, FatoPendente::class, GastoLocal::class], version = 2, exportSchema = true)
 abstract class Banco : RoomDatabase() {
     abstract fun dados(): Dados
+    abstract fun gastos(): DadosGastos
     companion object {
-        fun abrir(contexto: Context): Banco = Room.databaseBuilder(contexto, Banco::class.java, "secretario.db").build()
+        val MIGRACAO_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `gastos` (`id` TEXT NOT NULL, `data` TEXT NOT NULL, `valor_centavos` INTEGER NOT NULL, `descricao` TEXT NOT NULL, `estabelecimento` TEXT NOT NULL, `categoria` TEXT NOT NULL, `forma` TEXT NOT NULL, `origem` TEXT NOT NULL, `confirmado` INTEGER NOT NULL, `sincronizado` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+            }
+        }
+        fun abrir(contexto: Context): Banco = Room.databaseBuilder(contexto, Banco::class.java, "secretario.db")
+            .addMigrations(MIGRACAO_1_2).build()
     }
 }

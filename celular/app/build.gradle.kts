@@ -42,6 +42,7 @@ dependencies {
     implementation(libs.camera.lifecycle)
     implementation(libs.camera.view)
     implementation(libs.mlkit.barcode)
+    implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation(libs.security.crypto)
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)

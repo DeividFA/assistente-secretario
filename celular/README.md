@@ -216,3 +216,50 @@ O revisor executa `./gradlew testDebugUnitTest assembleDebug`. O Codex não rodo
 Gradle nem fez commit. Verificações isoladas não substituem testes em aparelho:
 validar toque, overlay, tela com senha, app bloqueado, janela FLAG_SECURE,
 confirmação recusada e invalidação de índices antes de uso real.
+
+## Gastos (C5)
+
+A tela Gastos recebe os rascunhos ditados/digitados na conversa, permite corrigir
+e confirmar, importar CSV com colunas mapeadas, ler comprovantes com CameraX e
+ML Kit Text Recognition empacotado, corrigir categorias e definir orçamentos
+mensais (aviso a partir de 80%). A consulta “quanto gastei esse mês com mercado?”
+usa somente os gastos confirmados. Todas as contas e o protocolo usam centavos
+inteiros; os campos em reais são texto convertido sem ponto flutuante.
+
+O OCR roda no aparelho; seu texto é enviado transitoriamente à IA configurada
+para extrair valor, data, loja e categoria. Foto e texto não entram no histórico
+nem no banco. Sem chave de IA, voz/texto permitem categoria manual; foto exige a
+chave. Categorias corrigidas são lembradas por estabelecimento.
+
+Notificações começam desligadas, sem apps marcados. Para usar, ligue a chave em
+Gastos, conceda acesso na tela do Android e marque os bancos desejados. Somente
+os apps marcados e reconhecidos por BloqueioFinanceiro são considerados. O
+serviço filtra compras aprovadas/Pix enviado e persiste apenas campos extraídos,
+pendentes de confirmação. Não abre apps nem altera o bloqueio de intents ou
+Acessibilidade. Reentregas da mesma notificação usam identidade determinística;
+CSV ignora repetição por data, valor, estabelecimento e origem.
+
+Room passa de 1 para 2 com MIGRACAO_1_2 (somente CREATE TABLE gastos). Não há
+fallback destrutivo. O schema 1 exportado foi preservado; o KSP exportará o schema
+2 em app/schemas na próxima compilação do revisor. Validar a atualização de uma
+instalação v1 com mensagens/fatos existentes e conferir sua preservação.
+
+A sincronização ocorre enquanto o app está aberto. POST /gastos recebe
+`{"gastos": [...]}` (até 50); cada item tem id local, data ISO, valor_centavos,
+descricao curta, estabelecimento, categoria, forma, origem e confirmado.
+Responde `{"ids": [...]}`. GET /gastos?desde=AAAA-MM-DD devolve
+`{"gastos": [...]}` do aparelho autenticado. Reenvio/correção faz upsert pela
+chave (aparelho autenticado, id local), sem confiar em aparelho enviado no corpo.
+Correções locais aguardam confirmação do PC antes de sair da fila.
+
+No PC, voz/gastos.py usa registro.BANCO, incluído no backup integral existente.
+Ao receber um lote gera Finanças/Gastos AAAA-MM.md no cofre, somente com totais
+confirmados por categoria (sem detalhes de cartão/conta). Aceita banco/cofre
+temporários nos testes. Se a gravação da nota falhar após salvar o banco, o
+celular mantém o lote pendente e pode reenviá-lo sem duplicação.
+
+Para o revisor: executar os testes Python de gastos/ponte e os testes JVM,
+compilar e validar em aparelho câmera, permissão de notificações, seleção de
+apps, recusa de confirmação, migração v1→v2, sincronização offline/reenvio,
+CSV com vírgula decimal, correção de categoria e aviso de orçamento.
+Gradle e pytest não foram executados pelo Codex.

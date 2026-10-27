@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.serialization.json.*
 
 class ConversaModelo(aplicacao: Application) : AndroidViewModel(aplicacao) {
     val configuracao = Configuracao(aplicacao)
@@ -20,6 +21,12 @@ class ConversaModelo(aplicacao: Application) : AndroidViewModel(aplicacao) {
     val aviso = MutableStateFlow<String?>(null)
     val falar = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val interfaceAcoes = InterfaceAcoes()
+    val preferenciasGastos = PreferenciasGastos(aplicacao)
+    private val gastos = GastosCelular(banco.gastos(), preferenciasGastos)
+    val listaGastos = banco.gastos().observar().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val rascunhoGasto = MutableStateFlow<RascunhoGasto?>(null)
+    val resumoGastos = MutableStateFlow("")
+    private val iaGastos = ClienteNuvem(configuracao::nuvem, RegistroAcoes(emptyList()))
     private val lembretes = LembretesCelular(aplicacao)
     private val pc = ClientePc({ evento ->
         viewModelScope.launch {
@@ -48,6 +55,7 @@ class ConversaModelo(aplicacao: Application) : AndroidViewModel(aplicacao) {
                     val pareamento = configuracao.pareamento()
                     if (pareamento != null && withTimeoutOrNull(1500) { pc.conectar(pareamento) } == true) {
                         lembretes.sincronizar(pc)
+                        gastos.sincronizar(pc)
                         val pendentes = dados.fatos()
                         if (pendentes.isNotEmpty()) {
                             pc.sincronizar(pendentes.map { it.texto })
@@ -81,6 +89,15 @@ class ConversaModelo(aplicacao: Application) : AndroidViewModel(aplicacao) {
 
     fun enviar(texto: String) {
         if (enviando.value || texto.isBlank()) return
+        if (Regex("^(gastei|paguei)\\b", RegexOption.IGNORE_CASE).containsMatchIn(texto.trim())) {
+            prepararGasto(texto); return
+        }
+        if (texto.contains("quanto gastei", true)) {
+            viewModelScope.launch {
+                val categoria = Regex("com\\s+(.+?)[?.]?$", RegexOption.IGNORE_CASE).find(texto)?.groupValues?.get(1).orEmpty()
+                dados.inserir(MensagemLocal(autor = "Secretário", texto = gastos.resumo(categoria), origem = "Celular"))
+            }; return
+        }
         viewModelScope.launch {
             enviando.value = true
             aviso.value = null
@@ -102,4 +119,61 @@ class ConversaModelo(aplicacao: Application) : AndroidViewModel(aplicacao) {
     }
 
     override fun onCleared() { parar(); banco.close() }
+
+    fun prepararGasto(texto: String, foto: Boolean = false) {
+        viewModelScope.launch {
+            enviando.value = true
+            try {
+                val base = if (foto) {
+                    val o = iaGastos.extrairGasto(texto, true)
+                    val data = o.getValue("data").jsonPrimitive.content
+                    java.time.LocalDate.parse(data)
+                    val valor = o.getValue("valor_centavos").jsonPrimitive.long
+                    require(valor in 1..1_000_000_000_000L)
+                    RascunhoGasto(data, valor, ParseGastos.seguro(o.getValue("estabelecimento").jsonPrimitive.content),
+                        ParseGastos.seguro(o.getValue("categoria").jsonPrimitive.content), origem = "foto")
+                } else ParseGastos.texto(texto) ?: error("Não encontrei o valor em reais")
+                val aprendida = preferenciasGastos.categoria(base.estabelecimento)
+                val categoria = aprendida ?: if (foto) base.categoria else try {
+                    ParseGastos.seguro(iaGastos.extrairGasto(base.estabelecimento, false).getValue("categoria").jsonPrimitive.content)
+                } catch (e: CancellationException) { throw e } catch (_: Exception) { "Outros" }
+                rascunhoGasto.value = base.copy(categoria = categoria)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { aviso.value = "Não foi possível extrair o gasto: ${e.message}" }
+            finally { enviando.value = false }
+        }
+    }
+
+    fun confirmarGasto(item: RascunhoGasto) = viewModelScope.launch {
+        try {
+            gastos.guardar(item, true)
+            preferenciasGastos.aprender(item.estabelecimento, item.categoria)
+            rascunhoGasto.value = null
+            atualizarResumo()
+        } catch (e: Exception) { aviso.value = "Gasto inválido: ${e.message}" }
+    }
+
+    fun corrigirGasto(item: GastoLocal, categoria: String) = viewModelScope.launch {
+        gastos.corrigir(item, categoria)
+        atualizarResumo()
+    }
+
+    fun importarCsv(texto: String, colunas: Map<String, String>) = viewModelScope.launch {
+        try {
+            val itens = ParseGastos.csv(texto, colunas)
+            if (interfaceAcoes.confirmar("Importar ${itens.size} gastos? Total: ${ParseGastos.reais(itens.sumOf { it.valor })}")) {
+                var novos = 0
+                itens.forEach { if (gastos.guardar(it, true)) novos++ }
+                aviso.value = "$novos gastos importados; duplicados ignorados"
+                atualizarResumo()
+            }
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) { aviso.value = "CSV inválido: ${e.message}" }
+    }
+
+    fun definirOrcamento(categoria: String, valor: String) {
+        runCatching { preferenciasGastos.orcamento(ParseGastos.seguro(categoria), ParseGastos.centavos(valor)) }
+            .onSuccess { atualizarResumo() }.onFailure { aviso.value = "Informe o orçamento em reais (ex.: 500,00)" }
+    }
+    fun atualizarResumo() { viewModelScope.launch { resumoGastos.value = gastos.resumo(); aviso.value = gastos.avisos().ifBlank { null } } }
 }
