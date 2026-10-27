@@ -116,6 +116,7 @@ private fun Tela(modelo: ConversaModelo, ouvir: () -> Unit) {
         Text("PC ${if (conectado) "conectado" else "desconectado"} · $estado", color = MaterialTheme.colorScheme.onSurface)
         TextButton(onClick = { gastos = !gastos; configuracoes = false }) { Text(if (gastos) "Voltar à conversa" else "Gastos") }
         aviso?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+        Atualizacao(modelo.configuracao)
         if (gastos) {
             TelaGastos(modelo, Modifier.weight(1f))
         } else if (configuracoes) {

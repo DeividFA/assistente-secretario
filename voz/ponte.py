@@ -10,6 +10,7 @@ import hmac
 import io
 import ipaddress
 import json
+from pathlib import Path
 import secrets
 import socket
 import sqlite3
@@ -27,6 +28,7 @@ import memoria
 import registro
 import lembretes
 import gastos
+import config
 
 APARELHO = web.RequestKey('aparelho', int)
 # Um QR mostrado na tela e nunca usado não pode virar chave eterna.
@@ -177,9 +179,41 @@ class Ponte:
         app.router.add_post('/lembretes', self.criar_lembrete)
         app.router.add_post('/gastos', self.receber_gastos)
         app.router.add_get('/gastos', self.listar_gastos)
-        for metodo, caminho in [('GET', '/apk')]:
-            app.router.add_route(metodo, caminho, self.futuro)
+        app.router.add_get('/apk', self.apk)
+        app.router.add_get('/apk/versao', self.versao_apk)
         return app
+
+    def ler_apk(self):
+        raiz = Path(__file__).resolve().parents[1]
+        pasta = Path(config.carregar().get('pasta_apk') or 'celular/app/build/outputs/apk')
+        if not pasta.is_absolute():
+            pasta = raiz / pasta
+        candidatos = [p for p in pasta.rglob('*.apk') if p.is_file()]
+        if not candidatos:
+            raise web.HTTPNotFound(text='Nenhum APK disponível')
+        arquivo = max(candidatos, key=lambda p: (p.stat().st_mtime_ns, str(p)))
+        try:
+            metadados = json.loads(arquivo.with_name('output-metadata.json').read_text(encoding='utf-8'))
+            item = next(i for i in metadados['elements'] if i['outputFile'] == arquivo.name)
+            codigo, nome = item['versionCode'], item['versionName']
+            if type(codigo) is not int or codigo <= 0 or not isinstance(nome, str) or not nome.strip():
+                raise ValueError('Versão inválida')
+            dados = arquivo.read_bytes()
+        except (OSError, ValueError, KeyError, TypeError, StopIteration) as erro:
+            raise web.HTTPServiceUnavailable(text='APK sem metadados Gradle válidos') from erro
+        return dados, dict(versionCode=codigo, versionName=nome,
+                           sha256=hashlib.sha256(dados).hexdigest())
+
+    async def versao_apk(self, request):
+        _, versao = await asyncio.to_thread(self.ler_apk)
+        return web.json_response(versao, headers={'Cache-Control': 'no-store'})
+
+    async def apk(self, request):
+        dados, versao = await asyncio.to_thread(self.ler_apk)
+        return web.Response(body=dados, content_type='application/vnd.android.package-archive', headers={
+            'X-Version-Code': str(versao['versionCode']), 'X-Version-Name': versao['versionName'],
+            'X-SHA256': versao['sha256'], 'Cache-Control': 'no-store',
+            'Content-Disposition': 'attachment; filename="secretario.apk"'})
 
     async def eventos(self, request):
         ws = web.WebSocketResponse(heartbeat=30, max_msg_size=4096)

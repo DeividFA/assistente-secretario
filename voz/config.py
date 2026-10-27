@@ -6,6 +6,7 @@ from pathlib import Path
 BASE = Path(__file__).resolve().parent
 PADROES = {
     "ponte_ativa": False,
+    "pasta_apk": "celular/app/build/outputs/apk",
     "microfone": None,
     "mic_em_chamada": "liberar",
     "modo_microfone": "continuo",

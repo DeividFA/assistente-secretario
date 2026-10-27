@@ -1,4 +1,4 @@
-﻿"""Ponte testada com SQLite temporário, sem motor, áudio ou rede externa."""
+"""Ponte testada com SQLite temporário, sem motor, áudio ou rede externa."""
 
 import asyncio
 import base64
@@ -14,6 +14,62 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import ponte
+
+
+@pytest.fixture(autouse=True)
+def pasta_apk_isolada(tmp_path, monkeypatch):
+    monkeypatch.setattr(ponte.config, 'carregar', lambda: {'pasta_apk': str(tmp_path / 'apks')})
+
+
+def test_apk_mais_recente_versao_hash_e_autenticacao(tmp_path):
+    import os
+
+    def criar(nome, conteudo, codigo, instante):
+        pasta = tmp_path / 'apks' / nome
+        pasta.mkdir(parents=True)
+        apk = pasta / 'app.apk'
+        apk.write_bytes(conteudo)
+        (pasta / 'output-metadata.json').write_text(json.dumps({'elements': [dict(
+            outputFile=apk.name, versionCode=codigo, versionName=f'1.{codigo}')] }), encoding='utf-8')
+        os.utime(apk, (instante, instante))
+        return apk
+
+    criar('antigo', b'antigo', 1, 100)
+    novo = criar('novo', b'novo APK', 2, 200)
+
+    async def verificar():
+        p, headers, _ = preparar(tmp_path)
+        async with TestClient(TestServer(p.criar_app())) as cliente:
+            assert (await cliente.get('/apk/versao')).status == 401
+            assert (await cliente.get('/apk')).status == 401
+            esperado = dict(versionCode=2, versionName='1.2', sha256=hashlib.sha256(b'novo APK').hexdigest())
+            resposta = await cliente.get('/apk/versao', headers=headers)
+            assert resposta.status == 200
+            assert await resposta.json() == esperado
+            resposta = await cliente.get('/apk', headers=headers)
+            assert resposta.status == 200
+            assert await resposta.read() == b'novo APK'
+            assert resposta.content_type == 'application/vnd.android.package-archive'
+            assert resposta.headers['X-Version-Code'] == '2'
+            assert resposta.headers['X-Version-Name'] == '1.2'
+            assert resposta.headers['X-SHA256'] == esperado['sha256']
+            novo.write_bytes(b'alterado')
+            resposta = await cliente.get('/apk/versao', headers=headers)
+            assert (await resposta.json())['sha256'] == hashlib.sha256(b'alterado').hexdigest()
+            novo.with_name('output-metadata.json').write_text('{}', encoding='utf-8')
+            assert (await cliente.get('/apk', headers=headers)).status == 503
+            await p.revogar(1)
+            assert (await cliente.get('/apk/versao', headers=headers)).status == 401
+    asyncio.run(verificar())
+
+
+def test_apk_pasta_vazia(tmp_path):
+    async def verificar():
+        p, headers, _ = preparar(tmp_path)
+        async with TestClient(TestServer(p.criar_app())) as cliente:
+            for caminho in ('/apk', '/apk/versao'):
+                assert (await cliente.get(caminho, headers=headers)).status == 404
+    asyncio.run(verificar())
 
 
 def preparar(tmp_path):
@@ -58,7 +114,7 @@ def test_autenticacao_revogacao_limite_e_auditoria(tmp_path):
             assert (await cliente.get('/apk')).status == 401
             assert (await cliente.get('/apk', headers={'Authorization': 'Bearer errado'})).status == 401
             for _ in range(60):
-                assert (await cliente.get('/apk', headers=headers)).status == 501
+                assert (await cliente.get('/apk', headers=headers)).status == 404
             assert (await cliente.get('/apk', headers=headers)).status == 429
             p.limites.clear()
             await p.revogar(1)
@@ -243,11 +299,11 @@ def test_limite_expira_e_e_por_aparelho(tmp_path, monkeypatch):
                         (hashlib.sha256(outro.encode()).hexdigest(),))
         async with TestClient(TestServer(p.criar_app())) as cliente:
             for _ in range(60):
-                assert (await cliente.get('/apk', headers=headers)).status == 501
+                assert (await cliente.get('/apk', headers=headers)).status == 404
             assert (await cliente.get('/apk', headers=headers)).status == 429
-            assert (await cliente.get('/apk', headers={'Authorization': 'Bearer ' + outro})).status == 501
+            assert (await cliente.get('/apk', headers={'Authorization': 'Bearer ' + outro})).status == 404
             agora[0] += 60
-            assert (await cliente.get('/apk', headers=headers)).status == 501
+            assert (await cliente.get('/apk', headers=headers)).status == 404
     asyncio.run(verificar())
 
 
@@ -287,7 +343,7 @@ def test_autenticacao_compara_hash_com_tempo_constante(tmp_path, monkeypatch):
             return comparar(a, b)
         monkeypatch.setattr(ponte.hmac, 'compare_digest', capturar)
         async with TestClient(TestServer(p.criar_app())) as cliente:
-            assert (await cliente.get('/apk', headers=headers)).status == 501
+            assert (await cliente.get('/apk', headers=headers)).status == 404
         esperado = hashlib.sha256(('a' * 64).encode()).hexdigest()
         assert comparacoes == [(esperado, esperado)]
     asyncio.run(verificar())

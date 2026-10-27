@@ -1,4 +1,4 @@
-# Secretário Android — C2/C3/C4
+# Secretário Android — C2 a C8
 
 Base pessoal em Kotlin/Compose, tema escuro/menta, Android 10 ou superior.
 `RegistroAcoes` expõe as ações C3 à nuvem por chamadas de função.
@@ -10,21 +10,96 @@ Pré-requisitos: JDK 17, Android SDK com `platforms;android-35`, build-tools e
 platform-tools; `ANDROID_HOME` apontando para o SDK (ou `sdk.dir` em
 `local.properties`). Aceite as licenças com `sdkmanager --licenses`.
 
-O `gradle-wrapper.jar` será gerado pelo revisor. Os scripts e as propriedades
-estão incluídos, com distribuição oficial Gradle 8.9. Para gerar o JAR com uma
-instalação confiável do Gradle 8.9, dentro de `celular/`:
+O wrapper incluído usa Gradle 8.9; o plugin Android é AGP 8.7.3.
+No PowerShell 5.1, dentro de `celular/`, o script seleciona o JDK 17 de
+`C:/Program Files/Microsoft/jdk-17*`, compila e instala por adb:
 
 ```powershell
-gradle wrapper --gradle-version 8.9 --distribution-type bin
-.\gradlew.bat testDebugUnitTest assembleDebug
-adb install -r app\build\outputs\apk\debug\app-debug.apk
+.\instalar.ps1                         # USB, dispositivo autorizado
+.\instalar.ps1 -Dispositivo SERIAL     # escolher entre vários aparelhos
+.\instalar.ps1 -Parear 192.168.1.20:37001 123456 -Conectar 192.168.1.20:39001
+.\instalar.ps1 -Conectar 192.168.1.20:39001 -Tipo Release
 ```
+
+No Android 11+, habilite **Opções do desenvolvedor → Depuração sem fio → Parear
+com código**. A porta de pareamento e a porta de conexão são diferentes; use as
+exibidas no celular. O código é temporário. Para USB, habilite depuração USB e
+aceite a chave do PC. O script usa adb do PATH ou do SDK configurado em
+`ANDROID_HOME`, `ANDROID_SDK_ROOT` ou `local.properties`; falhas interrompem a instalação.
 
 Em Linux/macOS: `chmod +x gradlew`, `./gradlew testDebugUnitTest assembleDebug` e
 `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
 O APK debug usa a assinatura local de desenvolvimento. Para instalar manualmente,
 copie o APK e habilite a instalação de fontes desconhecidas para o app que o abrir.
 Nenhum comando Gradle foi executado durante a implementação.
+
+### Versão e assinatura local
+
+Edite `celular/versao.properties` antes de compilar: `versionCode` deve ser um
+inteiro positivo crescente e `versionName` é o nome exibido. Debug e release usam
+esses mesmos valores. O Android só aceita atualização com a mesma chave de assinatura;
+guarde o keystore e seu backup fora do repositório. Trocar de debug para release
+exige reinstalação se as chaves forem diferentes, com perda dos dados locais.
+
+Crie sua chave com o `keytool` do JDK (ele pede as senhas interativamente):
+
+```powershell
+keytool -genkeypair -keystore "$env:USERPROFILE\secretario-release.jks" -alias secretario -keyalg RSA -keysize 3072 -validity 10000
+```
+
+Configure estas variáveis no ambiente do processo que compila:
+`SECRETARIO_STOREFILE`, `SECRETARIO_STOREPASSWORD`, `SECRETARIO_KEYALIAS`,
+`SECRETARIO_KEYPASSWORD`. Cada variável tem prioridade sobre a propriedade
+correspondente em `celular/keystore.properties` (ignorado pelo git):
+
+```properties
+storeFile=C:/Users/SEU_USUARIO/secretario-release.jks
+storePassword=SENHA_LOCAL
+keyAlias=secretario
+keyPassword=SENHA_LOCAL
+```
+
+Use barras `/` nos caminhos desse arquivo; caminhos relativos partem de `celular/`.
+Prefira obter as senhas do Gerenciador de Credenciais para o ambiente da sessão;
+o projeto não grava senhas no código nem cria uma chave automaticamente.
+Sem arquivo de chave ou credenciais completas, `assembleRelease` gera release
+**não assinado** e o script recusa instalá-lo. Debug continua com a chave de desenvolvimento.
+
+### Atualizar pela ponte
+
+Em `voz/config.json`, `pasta_apk` escolhe a pasta de publicação; o padrão é
+`celular/app/build/outputs/apk`. Caminhos relativos partem da raiz do repositório.
+A ponte procura recursivamente o `.apk` com modificação mais recente (desempate
+pelo caminho) e exige o `output-metadata.json` gerado pelo Gradle na mesma pasta,
+com `outputFile`, `versionCode` e `versionName` do APK. Para publicar em outra pasta,
+copie ambos após a compilação, sem modificar arquivos enquanto são servidos.
+Publique somente a variante assinada com a chave usada no celular.
+
+`GET /apk/versao` retorna `{versionCode, versionName, sha256}`; `GET /apk`
+retorna os bytes com `X-Version-Code`, `X-Version-Name` e `X-SHA256`.
+Ambas exigem o Bearer do aparelho e mantêm o limite de requisições e a auditoria
+da ponte. Pasta sem APK retorna 404; metadados ausentes/inválidos retornam 503.
+O hash é calculado sobre os bytes servidos, sem usar o arquivo de versão ainda não compilado.
+
+Ao abrir o app pareado, ele consulta no máximo uma vez a cada 24 horas (inclusive
+tentativas sem conexão); **Verificar atualização** permite consulta manual.
+A comparação usa `versionCode`. Quando há versão nova, **Baixar e instalar** salva
+o APK no cache privado e confere SHA-256 antes de abrir o instalador por FileProvider.
+Se a publicação mudou entre consulta e download, a instalação é bloqueada e é preciso
+consultar novamente. Na primeira atualização, permita **Instalar apps desconhecidos**
+para o Secretário; ao voltar, ele abre o instalador. A instalação sempre exige a
+confirmação do Android. O hash verifica integridade; a assinatura é validada pelo Android.
+Para primeira instalação, use o script adb acima; o QR de pareamento não é um link
+público de download, pois `/apk` exige autenticação.
+
+Verificações para o revisor (não executadas nesta implementação):
+
+```powershell
+# Na raiz do repositório:
+voz/.venv/Scripts/python.exe -m pytest voz/tests/test_ponte.py -q
+# Em celular/:
+.\gradlew.bat testDebugUnitTest assembleDebug assembleRelease
+```
 
 ## Uso
 

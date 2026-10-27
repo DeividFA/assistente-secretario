@@ -1,9 +1,21 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
 }
+val versao = Properties().apply { rootProject.file("versao.properties").inputStream().use { load(it) } }
+val chaves = Properties().apply {
+    rootProject.file("keystore.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+fun segredo(nome: String): String? = System.getenv("SECRETARIO_${nome.uppercase()}")
+    ?.takeIf { it.isNotBlank() } ?: chaves.getProperty(nome)?.takeIf { it.isNotBlank() }
+val caminhoChave = segredo("storeFile")
+val arquivoChave = caminhoChave?.let { rootProject.file(it) }
+val podeAssinar = arquivoChave?.isFile == true &&
+    listOf("storePassword", "keyAlias", "keyPassword").all { segredo(it) != null }
 android {
     namespace = "com.deivid.secretario"
     compileSdk = 35
@@ -11,10 +23,21 @@ android {
         applicationId = "com.deivid.secretario"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = versao.getProperty("versionCode").toInt().also { require(it > 0) }
+        versionName = versao.getProperty("versionName").also { require(!it.isNullOrBlank()) }
     }
-    buildFeatures { compose = true }
+    signingConfigs {
+        if (podeAssinar) create("localRelease") {
+            storeFile = arquivoChave
+            storePassword = segredo("storePassword")
+            keyAlias = segredo("keyAlias")
+            keyPassword = segredo("keyPassword")
+        }
+    }
+    buildTypes { getByName("release") {
+        if (podeAssinar) signingConfig = signingConfigs.getByName("localRelease")
+    } }
+    buildFeatures { compose = true; buildConfig = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
