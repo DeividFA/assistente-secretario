@@ -288,3 +288,9 @@ kbd { font: 600 11px "Segoe UI", sans-serif; padding: 1px 6px; border-radius: 5p
 .perfil-acoes button { padding: 8px 14px; border-radius: 8px; cursor: pointer; }
 #perfil-proximo { background: #93e5c0; color: #15251e; }
 #perfil-aviso { min-height: 1.5em; }
+
+#configuracoes { width: min(700px, 90vw); max-height: 85vh; overflow-y: auto; }
+#config-campos label, #config-chaves label { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 14px 0; }
+#config-campos input:not([type=checkbox]), #config-chaves input { flex: 1; min-width: 180px; }
+#configuracoes button { margin: 4px; }
+.msg .texto textarea { display: block; width: 100%; min-height: 80px; }

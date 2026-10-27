@@ -159,6 +159,15 @@
   <dialog id="configuracoes" aria-labelledby="configuracoes-titulo">
     <div class="vozes-topo"><h2 id="configuracoes-titulo">Configurações</h2><button id="fechar-configuracoes">Fechar</button></div>
     <button id="configuracoes-calibrar">Calibrar voz</button>
+    <div id="config-campos"></div>
+    <p>Modelo do Whisper: aplicado no próximo início do motor.</p>
+    <p>Para idiomas sem voz do Windows, instale-a em Configurações &gt; Hora e idioma &gt; Fala.</p>
+    <h3>Chaves de API</h3><div id="config-chaves"></div>
+    <div id="config-atalhos"></div>
+    <button id="config-backup">Fazer backup agora</button>
+    <button id="config-saude">Verificar saúde</button>
+    <div id="config-celular"></div>
+    <p id="config-aviso" role="status" aria-live="polite"></p>
   </dialog>
   <dialog id="calibrar-voz" aria-labelledby="calibrar-titulo">
     <div class="vozes-topo"><h2 id="calibrar-titulo">Calibrar voz</h2><button id="calibrar-fechar">Fechar</button></div>

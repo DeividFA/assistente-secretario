@@ -186,6 +186,33 @@ function elementoMensagem(m, anterior) {
     }
     div.querySelector('.corpo').appendChild(botoes);
   }
+  if (!sec && m.autor === 'voce' && m.via === 'voz') {
+    const lapis = document.createElement('button');
+    lapis.textContent = '✎';
+    lapis.title = 'Corrigir transcrição';
+    lapis.setAttribute('aria-label', lapis.title);
+    lapis.onclick = () => {
+      const campo = document.createElement('textarea');
+      campo.value = m.texto;
+      campo.maxLength = 10000;
+      const salvarEdicao = document.createElement('button');
+      salvarEdicao.textContent = 'Salvar correção';
+      const cancelar = document.createElement('button');
+      cancelar.textContent = 'Cancelar';
+      cancelar.onclick = desenharMensagens;
+      salvarEdicao.onclick = () => {
+        const certo = campo.value.trim();
+        if (!certo) return;
+        window.secretario.enviar({ cmd: 'correcao', errado: m.texto, certo });
+        m.texto = certo;
+        salvar(); desenharMensagens(); desenharConversas();
+      };
+      div.querySelector('.texto').replaceChildren(campo, salvarEdicao, cancelar);
+      lapis.disabled = true;
+      campo.focus();
+    };
+    div.querySelector('.cab').append(lapis);
+  }
   return div;
 }
 
@@ -378,7 +405,10 @@ function abrirCalibracao() {
   window.secretario.enviar({ cmd: 'calibrar_voz', acao: 'iniciar' });
 }
 $('btn-calibrar').onclick = abrirCalibracao;
-$('btn-configuracoes').onclick = () => $('configuracoes').showModal();
+$('btn-configuracoes').onclick = () => {
+  $('configuracoes').showModal();
+  window.secretario.enviar({ cmd: 'configuracoes' });
+};
 $('fechar-configuracoes').onclick = () => $('configuracoes').close();
 $('configuracoes-calibrar').onclick = () => { $('configuracoes').close(); abrirCalibracao(); };
 $('calibrar-fechar').onclick = () => $('calibrar-voz').close();
@@ -457,6 +487,9 @@ window.secretario.aoEvento((ev) => {
       mostrarVozes(vozesAtuais.lista, vozesAtuais.atual);
       break;
     case 'ponte': mostrarPonte(ev); break;
+    case 'configuracoes': mostrarConfiguracoes(ev); break;
+    case 'config_resultado': $('config-aviso').textContent = ev.texto; break;
+    case 'correcao': adicionar({ autor: 'sistema', texto: ev.texto }); break;
     case 'motores': mostrarMotores(ev.lista, ev.atual); break;
     case 'fila': mostrarFila(ev.tarefas); break;
     case 'estado': mostrarEstado(ev.estado); break;
@@ -690,3 +723,72 @@ $('refazer-apresentacao').onclick = () => {
   window.secretario.enviar({ cmd: 'perfil_atual' });
 };
 window.secretario.enviar({ cmd: 'perfil_atual' });
+
+// Configurações públicas; credenciais nunca são preenchidas com valores recebidos.
+function mostrarConfiguracoes(ev) {
+  const campos = $('config-campos');
+  campos.replaceChildren();
+  const opcoes = {
+    motor_padrao: [...$('seletor-motor').options].map((o) => o.value),
+    modelo_whisper: ['tiny', 'base', 'small', 'medium', 'large-v3', 'large-v3-turbo'],
+    transcricao: ['local', 'groq', 'openai'],
+    modo_microfone: ['continuo', 'sob_demanda'],
+    mic_em_chamada: ['liberar', 'compartilhar'],
+  };
+  const rotulos = { motor_padrao: 'Motor padrão', modelo_whisper: 'Modelo do Whisper',
+    transcricao: 'Transcrição', modo_microfone: 'Modo do microfone', mic_em_chamada: 'Durante chamada',
+    pausa_auto: 'Pausa automática', idiomas: 'Idiomas (separados por vírgula)',
+    pasta_backup: 'Pasta de backup', pasta_backup_extra: 'Pasta extra de backup (opcional)' };
+  for (const [chave, valor] of Object.entries(ev.valores)) {
+    const linha = document.createElement('label');
+    linha.textContent = rotulos[chave];
+    const campo = document.createElement(opcoes[chave] ? 'select' : 'input');
+    if (opcoes[chave]) {
+      for (const item of new Set([...opcoes[chave], valor])) {
+        const opcao = document.createElement('option');
+        opcao.value = item; opcao.textContent = item; campo.append(opcao);
+      }
+    }
+    if (chave === 'pausa_auto') { campo.type = 'checkbox'; campo.checked = valor; }
+    else campo.value = Array.isArray(valor) ? valor.join(', ') : valor || '';
+    const botao = document.createElement('button');
+    botao.textContent = 'Salvar';
+    botao.onclick = () => {
+      let novo = campo.value;
+      if (chave === 'pausa_auto') novo = campo.checked;
+      if (chave === 'idiomas') novo = novo.split(',').map((s) => s.trim());
+      if (chave === 'pasta_backup_extra' && !novo.trim()) novo = null;
+      $('config-aviso').textContent = 'Salvando…';
+      window.secretario.enviar({ cmd: 'config', chave, valor: novo });
+    };
+    linha.append(campo, botao); campos.append(linha);
+  }
+  const chaves = $('config-chaves'); chaves.replaceChildren();
+  for (const [motor, configurada] of Object.entries(ev.chaves)) {
+    const linha = document.createElement('label');
+    linha.textContent = `${motor}: ${configurada ? 'configurada' : 'não configurada'}`;
+    const campo = document.createElement('input');
+    campo.type = 'password'; campo.autocomplete = 'new-password'; campo.maxLength = 4096;
+    const botao = document.createElement('button'); botao.textContent = 'Salvar';
+    botao.onclick = () => {
+      if (!campo.value.trim()) return;
+      window.secretario.enviar({ cmd: 'chave', motor, valor: campo.value });
+      campo.value = '';
+    };
+    linha.append(campo, botao); chaves.append(linha);
+  }
+  $('config-aviso').textContent = 'Configurações atualizadas.';
+}
+for (const [rotulo, destino] of [['Refazer apresentação', 'refazer-apresentacao'], ['Vozes', 'btn-vozes'], ['Problemas', 'btn-problemas']]) {
+  const botao = document.createElement('button'); botao.textContent = rotulo;
+  botao.onclick = () => { $('configuracoes').close(); $(destino).click(); };
+  $('config-atalhos').append(botao);
+}
+$('config-celular').append($('btn-celular').parentElement);
+$('btn-configuracoes').className = 'botao-icone';
+document.querySelector('.usuario').append($('btn-configuracoes'));
+$('config-backup').onclick = () => window.secretario.enviar({ cmd: 'backup_agora' });
+$('config-saude').onclick = () => window.secretario.enviar({ cmd: 'verificar_saude' });
+$('configuracoes').addEventListener('close', () => {
+  $('config-chaves').querySelectorAll('input').forEach((campo) => { campo.value = ''; });
+});

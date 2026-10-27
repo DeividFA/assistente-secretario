@@ -19,6 +19,8 @@ Comandos do app (stdin, uma linha JSON cada):
 """
 
 import json
+import difflib
+import tempfile
 import os
 import queue
 import re
@@ -44,7 +46,70 @@ import vozes
 import memoria
 import extrator
 import vocabulario
+import padrao_fala
 from vocabulario import ativacao_tolerante
+
+CONFIG_OPCOES = {
+    'motor_padrao': tuple(provedores.MOTORES),
+    'modelo_whisper': ('tiny', 'base', 'small', 'medium', 'large-v3', 'large-v3-turbo'),
+    'transcricao': ('local', 'groq', 'openai'),
+    'modo_microfone': ('continuo', 'sob_demanda'),
+    'mic_em_chamada': ('liberar', 'compartilhar'),
+}
+CONFIG_CHAVES = (*CONFIG_OPCOES, 'pausa_auto', 'idiomas', 'pasta_backup', 'pasta_backup_extra')
+TRAVA_CONFIG = threading.Lock()
+
+
+def validar_config(chave, valor):
+    """Aceita somente opções públicas, sem converter tipos implicitamente."""
+    if not isinstance(chave, str) or chave not in CONFIG_CHAVES:
+        raise ValueError('Configuração desconhecida.')
+    if chave in CONFIG_OPCOES:
+        valido = isinstance(valor, str) and valor in CONFIG_OPCOES[chave]
+    elif chave == 'pausa_auto':
+        valido = type(valor) is bool
+    elif chave == 'idiomas':
+        valido = (isinstance(valor, list) and 1 <= len(valor) <= 10
+                  and all(isinstance(item, str) and re.fullmatch(r'[a-z]{2,3}', item) for item in valor)
+                  and len(set(valor)) == len(valor))
+    else:
+        valido = ((chave == 'pasta_backup_extra' and valor is None)
+                  or (isinstance(valor, str) and bool(valor.strip()) and len(valor) <= 4096
+                      and not any(ord(c) < 32 for c in valor) and Path(valor).is_absolute()))
+    if not valido:
+        raise ValueError('Valor de configuração inválido.')
+
+
+def salvar_config(chave, valor, caminho=None):
+    """Preserva chaves desconhecidas e substitui o arquivo apenas após gravar tudo."""
+    validar_config(chave, valor)
+    caminho = Path(caminho) if caminho is not None else BASE / 'config.json'
+    with TRAVA_CONFIG:
+        salvo = json.loads(caminho.read_text(encoding='utf-8')) if caminho.exists() else {}
+        salvo[chave] = valor
+        temporario = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=caminho.parent,
+                                             delete=False) as saida:
+                temporario = Path(saida.name)
+                json.dump(salvo, saida, ensure_ascii=False, indent=2)
+                saida.write('\n')
+                saida.flush()
+                os.fsync(saida.fileno())
+            os.replace(temporario, caminho)
+        finally:
+            if temporario is not None:
+                temporario.unlink(missing_ok=True)
+
+
+def diff_correcao(errado, certo):
+    """Só substituições de palavras podem ensinar pronúncia; inserções e cortes não."""
+    if not all(isinstance(t, str) and len(t) <= 10000 for t in (errado, certo)):
+        raise ValueError('Correção inválida.')
+    antes, depois = errado.split(), certo.split()
+    return [(' '.join(antes[i:j]), ' '.join(depois[k:l]))
+            for acao, i, j, k, l in difflib.SequenceMatcher(None, antes, depois, autojunk=False).get_opcodes()
+            if acao == 'replace']
 
 from comum import BASE, Microfone, bip, falar, normalizar, texto_para_fala, transcrever
 from comum import aquecer_voz, interromper_fala
@@ -176,7 +241,7 @@ class Assistente:
         self.silencio = False  # não falar as respostas (equivalente ao "ensurdecer" do Discord)
         self.conversa_ate = 0.0
         self.ativo = True
-        self.motor = ARQ_MOTOR.read_text(encoding="utf-8").strip() if ARQ_MOTOR.exists() else "claude"
+        self.motor = self.config_mic.get('motor_padrao') or (ARQ_MOTOR.read_text(encoding="utf-8").strip() if ARQ_MOTOR.exists() else "claude")
         if self.motor not in provedores.MOTORES:
             self.motor = "claude"
         self.historicos_api = {}
@@ -1059,6 +1124,13 @@ class Assistente:
                 self.mic.liberar()
             time.sleep(0.2)
 
+    def emitir_configuracoes(self):
+        valores = config.carregar()
+        valores.setdefault('motor_padrao', self.motor)
+        valores.setdefault('transcricao', 'local')
+        emitir(evento='configuracoes', valores={c: valores.get(c) for c in CONFIG_CHAVES},
+               chaves={nome: bool(provedores.ler_chave(nome)) for nome in provedores.VARIAVEIS_CHAVES})
+
     def ler_app(self):
         """Lê comandos do app Electron pelo stdin."""
         for linha in sys.stdin:
@@ -1067,6 +1139,30 @@ class Assistente:
             except json.JSONDecodeError:
                 continue
             tipo = cmd.get("cmd")
+            if tipo in ('config', 'configuracoes', 'correcao', 'backup_agora', 'verificar_saude'):
+                try:
+                    if tipo == 'config':
+                        salvar_config(cmd.get('chave'), cmd.get('valor'))
+                        self.config_mic[cmd['chave']] = cmd['valor']
+                        if cmd['chave'] == 'motor_padrao':
+                            self.trocar_motor(cmd['valor'])
+                        self.emitir_configuracoes()
+                    elif tipo == 'configuracoes':
+                        self.emitir_configuracoes()
+                    elif tipo == 'correcao':
+                        pares = diff_correcao(cmd.get('errado'), cmd.get('certo'))
+                        aceitas = sum(bool(padrao_fala.aprender_pronuncia(a, b)) for a, b in pares)
+                        emitir(evento='correcao', texto=f'{aceitas} correções de pronúncia aprendidas.')
+                    elif tipo == 'backup_agora':
+                        backup.fazer_backup('pedido')
+                        emitir(evento='config_resultado', texto='Backup concluído.')
+                    else:
+                        diagnostico.verificar_saude(completo=True)
+                        self.emitir_bugs()
+                        emitir(evento='config_resultado', texto='Verificação de saúde concluída.')
+                except Exception:
+                    emitir(evento='config_resultado', texto='Não foi possível concluir. Confira os valores e tente novamente.')
+                continue
             if tipo == 'calibrar_voz':
                 self.comandos_calibracao.put(cmd)
                 continue
@@ -1129,12 +1225,16 @@ class Assistente:
                 self.trocar_motor(cmd.get("valor"))
             elif tipo == "chave":
                 try:
+                    if (cmd.get('motor') not in provedores.VARIAVEIS_CHAVES
+                            or not isinstance(cmd.get('valor'), str)
+                            or not cmd['valor'].strip() or len(cmd['valor']) > 4096):
+                        raise ValueError('Credencial inválida.')
                     provedores.salvar_chave(cmd.get("motor"), cmd.get("valor"))
                 except Exception:
-                    diagnostico.registrar_bug("motor", sys.exc_info()[1], sys.exc_info()[2])
                     emitir(evento="erro", texto="Não foi possível salvar a chave.")
                 else:
                     self.emitir_motores()
+                    self.emitir_configuracoes()
             elif tipo == "cancelar":
                 self.cancelar(id=cmd.get('id'))
             elif tipo == "mudo":
@@ -1143,10 +1243,7 @@ class Assistente:
             elif tipo == "modo_microfone" and cmd.get("valor") in ("continuo", "sob_demanda"):
                 self.config_mic["modo_microfone"] = cmd["valor"]
                 try:
-                    caminho = BASE / "config.json"
-                    salvo = json.loads(caminho.read_text(encoding="utf-8")) if caminho.exists() else {}
-                    salvo["modo_microfone"] = cmd["valor"]
-                    caminho.write_text(json.dumps(salvo, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                    salvar_config('modo_microfone', cmd['valor'])
                 except Exception as erro:
                     diagnostico.registrar_bug("motor", erro, erro.__traceback__,
                                              {"motor": getattr(self, "motor", ""),
