@@ -1,0 +1,9 @@
+{
+  "name": "secretario",
+  "productName": "Secretário",
+  "version": "1.0.0",
+  "description": "Secretário pessoal do Deivid",
+  "main": "main.js",
+  "scripts": { "start": "electron ." },
+  "devDependencies": { "electron": "33.2.1" }
+}
