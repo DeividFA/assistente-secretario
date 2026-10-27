@@ -488,3 +488,57 @@ T15", leia "depende de T23" (exceto a T19, que não depende mais dela).
 ## Ordem de execução (Fase 3, depois da Fase 2)
 Junto com a Fase 2: (T19 ‖ T21 ‖ T25) → (T20 ‖ T22 ‖ T24) → T26 → T23 → T16 → T17 → T27.
 (Tarefas que alteram `voz/assistente_voz.py` rodam uma de cada vez.)
+
+---
+
+# Fase 4 — vários motores ao mesmo tempo e apresentação inicial
+
+## T28 — Distribuir tarefas simultâneas entre motores
+- Depende de: T19, T22, T23. Arquivos: `voz/assistente_voz.py`, `voz/config.py`,
+  `voz/config.exemplo.json`, criar `voz/tests/test_distribuicao.py` (testar a função pura).
+- Fazer:
+  - Config `"motores_paralelos": ["claude", "codex", "gemma"]` (ordem de preferência) e
+    `"vagas": {"claude": 2, "codex": 1, "gemini-cli": 1, "gemma": 1, "api": 2}` (`api` vale
+    para cada motor do tipo api). O motor escolhido pelo usuário (`self.motor`) é sempre o
+    primeiro da lista.
+  - Função pura `escolher_motor(preferido, ocupacao, disponiveis, ordem, vagas) -> str|None`:
+    devolve o preferido se tiver vaga; senão o primeiro da `ordem` que esteja disponível
+    (`provedores.disponivel`) e com vaga; senão None (a tarefa espera na fila). Gemma nunca
+    roda junto com outra tarefa Gemma (1 vaga, CPU).
+  - O despachante usa `escolher_motor` para cada tarefa pendente (em ordem de prioridade) e
+    grava na fila o motor efetivamente usado. A tarefa leva o contexto de memória (T16) e o
+    prompt de voz qualquer que seja o motor.
+  - Respostas continuam faladas uma de cada vez, na ordem em que terminam (fila de fala da
+    T19); quando há mais de uma rodando, prefixo "Sobre <pedido>:" (já existe).
+  - Evento `fila` passa a incluir o motor de cada tarefa; o painel da T20 mostra o nome do
+    motor na linha da tarefa.
+- Testes: preferido com vaga; preferido cheio → próximo disponível; indisponível é pulado;
+  tudo cheio → None; segunda tarefa Gemma espera.
+
+## T29 — Apresentação inicial (conhecer o usuário)
+- Depende de: T9, T16. Arquivos: `app/renderer.js`, `app/index.html`, `app/estilo.css`,
+  `voz/assistente_voz.py`, `voz/memoria.py`, criar `voz/tests/test_perfil_inicial.py`.
+- Fazer:
+  - Na primeira execução (sem `"perfil_inicial": true` em `voz/config.json`), a interface
+    mostra um assistente de boas-vindas em etapas (uma pergunta por tela, com botões
+    Voltar/Próximo/Pular e barra de progresso). Cada pergunta pode ser respondida digitando
+    ou pelo botão de microfone (usa `{"cmd":"ditar"}` → o motor grava uma fala, transcreve e
+    devolve `{"evento":"ditado","texto":...}` sem executar nada).
+  - Perguntas: 1) como prefere ser chamado; 2) o que faz (profissão/ocupação); 3) onde
+    mora (cidade); 4) rotina — horários em que mais precisa de ajuda; 5) tarefas
+    repetitivas que mais quer delegar; 6) assuntos de interesse (múltipla escolha com os
+    `memoria.ASSUNTOS` + campo livre); 7) estilo das respostas (curtas e diretas /
+    detalhadas; formal / informal); 8) o que o secretário nunca deve fazer sem perguntar.
+  - Ao concluir: `{"cmd":"perfil_inicial","respostas":{...}}` → `memoria.salvar_perfil_inicial(
+    respostas, cofre)` grava `Perfil/Dados pessoais.md` (nome, cidade, ocupação — sem apagar
+    campos existentes), `Preferências/Estilo.md` (novo: estilo, rotina, nunca fazer),
+    `Perfil/Aprendizados.md` (tarefas a delegar) e cria as ligações com os hubs de assunto
+    escolhidos (`Assuntos/<X>.md` ganha "- Interesse do Deivid"), depois `indexar`. Marca
+    `"perfil_inicial": true` no config. Botão "Refazer apresentação" nas Configurações (T27).
+  - `voz_prompt.md` e `PROMPT_LOCAL`: incluir uma linha dizendo para seguir
+    `Preferências/Estilo.md` (o contexto de memória da T16 já traz o resumo).
+- Testes: `salvar_perfil_inicial` em cofre temporário cria/atualiza as notas sem apagar
+  dados existentes e liga os assuntos escolhidos.
+
+## Ordem de execução atualizada
+(T20 ‖ T24) → T26 → T23 → T28 → T16 → T17 → T29 → T27.
