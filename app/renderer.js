@@ -252,8 +252,36 @@ function mostrarNivel(valor) {
   });
 }
 
+let motorAtual = null;
+function mostrarMotores(lista, atual) {
+  motorAtual = atual;
+  const seletor = $('seletor-motor');
+  seletor.replaceChildren();
+  for (const [tipo, rotulo] of [['cli', 'Agentes'], ['api', 'Modelos (API)']]) {
+    const grupo = document.createElement('optgroup');
+    grupo.label = rotulo;
+    for (const motor of lista.filter((item) => item.tipo === tipo)) {
+      const opcao = document.createElement('option');
+      opcao.value = motor.nome;
+      opcao.textContent = motor.rotulo;
+      opcao.disabled = !motor.disponivel;
+      opcao.title = motor.motivo || motor.rotulo;
+      grupo.appendChild(opcao);
+    }
+    seletor.appendChild(grupo);
+  }
+  seletor.value = atual;
+  seletor.disabled = !lista.length;
+  seletor.title = lista.find((item) => item.nome === atual)?.motivo || 'Escolher motor';
+}
+$('seletor-motor').onchange = (e) => {
+  window.secretario.enviar({ cmd: 'motor', valor: e.target.value });
+  e.target.value = motorAtual;
+};
+
 window.secretario.aoEvento((ev) => {
   switch (ev.evento) {
+    case 'motores': mostrarMotores(ev.lista, ev.atual); break;
     case 'fila': mostrarFila(ev.tarefas); break;
     case 'estado': mostrarEstado(ev.estado); break;
     case 'nivel': mostrarNivel(ev.valor); break;
@@ -311,7 +339,8 @@ $('btn-obsidian').onclick = () => window.secretario.enviar({ cmd: 'obsidian' });
 
 desenharConversas();
 desenharMensagens();
-window.secretario.estado().then(({ estado, mudo }) => {
+window.secretario.estado().then(({ estado, mudo, motores }) => {
+  if (motorAtual === null && motores) mostrarMotores(motores.lista, motores.atual);
   mostrarEstado(estado);
   $('btn-mudo').classList.toggle('desligado', mudo);
   window.secretario.enviar({ cmd: 'sessao', id: atual().sessao });

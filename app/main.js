@@ -33,6 +33,7 @@ function reiniciarMotor() {
 let saindo = false;
 let estadoAtual = 'carregando';
 let mudo = false;
+let motores = { lista: [], atual: null };
 
 function reiniciarSecretario(completo) {
   if (saindo) return;
@@ -93,6 +94,11 @@ function atualizarBandeja() {
   bandeja.setToolTip(`Secretário — ${rotulo}`);
   bandeja.setContextMenu(Menu.buildFromTemplate([
     { label: 'Abrir Secretário', click: mostrar },
+    { label: 'Motor', submenu: motores.lista.map((item) => ({
+      label: item.rotulo, type: 'radio', checked: item.nome === motores.atual,
+      enabled: item.disponivel, toolTip: item.motivo || '',
+      click: () => enviarAoMotor({ cmd: 'motor', valor: item.nome }),
+    })) },
     { label: 'Microfone mudo', type: 'checkbox', checked: mudo, click: (i) => alternarMudo(i.checked) },
     { label: 'Abrir memória (Obsidian)', click: abrirObsidian },
     { type: 'separator' },
@@ -157,6 +163,7 @@ function iniciarMotor() {
   readline.createInterface({ input: motor.stdout }).on('line', (linha) => {
     let ev;
     try { ev = JSON.parse(linha); } catch { return; }
+    if (ev.evento === 'motores') { motores = { lista: ev.lista, atual: ev.atual }; atualizarBandeja(); }
     if (ev.evento === 'reiniciar') reiniciarSecretario(ev.completo === true);
     if (ev.evento === 'estado') { estadoAtual = ev.estado; atualizarBandeja(); }
     if (ev.evento === 'mensagem' && ev.autor === 'secretario' && janela && !janela.isVisible()) {
@@ -189,7 +196,7 @@ ipcMain.on('cmd', (_e, cmd) => {
   if (cmd.cmd === 'obsidian') return abrirObsidian();
   enviarAoMotor(cmd);
 });
-ipcMain.handle('estado', () => ({ estado: estadoAtual, mudo }));
+ipcMain.handle('estado', () => ({ estado: estadoAtual, mudo, motores }));
 
 app.whenReady().then(() => {
   app.setAppUserModelId('Secretario.Deivid');

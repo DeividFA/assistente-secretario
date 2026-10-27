@@ -31,6 +31,9 @@ from datetime import datetime
 from pathlib import Path
 
 import fila
+import agente_local
+import motores_cli
+import provedores
 from vocabulario import ativacao_tolerante
 
 from comum import BASE, Microfone, bip, falar, normalizar, texto_para_fala, transcrever
@@ -41,16 +44,12 @@ JANELA_CONVERSA = 15  # segundos após uma resposta em que dá para responder se
 LOG = BASE / "log_voz.txt"
 PROMPT_VOZ = (BASE / "voz_prompt.md").read_text(encoding="utf-8")
 CLAUDE = shutil.which("claude") or str(Path.home() / ".local" / "bin" / "claude.exe")
-# Motor do cérebro: "claude" (nuvem, com ferramentas) ou "gemma" (local via Ollama, só conversa).
+# Motor do cérebro escolhido entre os nomes do registro de provedores.
 ARQ_MOTOR = BASE / "motor.txt"
-OLLAMA_URL = "http://localhost:11434/api/chat"
-MODELO_LOCAL = "gemma3:4b"
-PROMPT_LOCAL = ("Você é o secretário pessoal do Deivid e responde por voz. Fale em português do Brasil, "
-                "de forma curta e natural, em 1 a 3 frases, sem markdown nem listas. Você roda localmente "
-                "e não consegue mexer no computador, na internet nem em arquivos; se pedirem isso, diga que "
-                "para essas tarefas ele deve dizer: secretário, usar Claude.")
-TROCA_MOTOR = re.compile(r"^(usa|usar|use|muda|mudar|troca|trocar|volta|voltar|liga|ligar)\b.*\b"
-                         r"(gem\w*|jem\w*|claud\w*|claude\w*|cloud\w*|clod\w*)\b")  # o Whisper às vezes ouve "gemão", "cloud"...
+TROCA_MOTOR = re.compile(r"^(?:usa|usar|use|muda|mudar|troca|trocar|volta|voltar|liga|ligar)"
+                         r"\s+(?:(?:o|a|para|pro|pra|motor)\s+)*(claude|cloud|codex|gemini-cli|"
+                         r"gemini|gemini cli|jemini|grok|groque|gpt|chat gpt|deepseek|mistral|"
+                         r"openrouter|gemma|qwen)[.!?]*$")
 
 NOMES_FERRAMENTAS = {
     "mcp__playwright__": "navegador",
@@ -122,7 +121,11 @@ class Assistente:
         self.conversa_ate = 0.0
         self.ativo = True
         self.motor = ARQ_MOTOR.read_text(encoding="utf-8").strip() if ARQ_MOTOR.exists() else "claude"
-        self.historico_local = []
+        if self.motor not in provedores.MOTORES:
+            self.motor = "claude"
+        self.historicos_api = {}
+        self.sessoes_cli = {}
+        self.pendentes_api = {}
 
     @property
     def ocupado(self):
@@ -234,73 +237,114 @@ class Assistente:
             self.falando = False
             self.estado_ocioso()
 
+    def emitir_motores(self):
+        emitir(evento="motores", lista=provedores.listar(), atual=self.motor)
+
     def trocar_motor(self, motor):
-        self.motor = motor
-        ARQ_MOTOR.write_text(motor, encoding="utf-8")
-        nome = "Gemma, local" if motor == "gemma" else "Claude, na nuvem"
+        if motor not in provedores.MOTORES:
+            self.dizer("Motor desconhecido.")
+            return
+        disponivel, motivo = provedores.disponivel(motor)
+        if not disponivel:
+            self.mensagem("sistema", motivo)
+            self.dizer(motivo)
+            self.emitir_motores()
+            return
+        with self.trava:
+            ARQ_MOTOR.write_text(motor, encoding="utf-8")
+            self.motor = motor
+        nome = provedores.MOTORES[motor]["rotulo"]
+        self.emitir_motores()
         self.mensagem("sistema", f"Motor: {nome}.")
         self.dizer(f"Ok, agora estou usando o {nome}.")
 
-    def tarefa_local(self, comando):
-        """Conversa com o Gemma pelo Ollama, sem ferramentas."""
-        import urllib.request
+    def tarefa_provedor(self, comando, motor, ctx):
         from registro import inicio_tarefa, fim_tarefa
-        tarefa_id = inicio_tarefa(comando, "gemma")
-        status = "erro"
-        resposta = ""
+        trabalho = _contexto.trabalho
+        tarefa_id = inicio_tarefa(comando, motor)
+        status, resposta, ferramentas = "erro", "", []
         try:
-            self.historico_local.append({"role": "user", "content": comando})
-            corpo = json.dumps({"model": MODELO_LOCAL, "stream": True, "keep_alive": "30m",
-                                "messages": [{"role": "system", "content": PROMPT_LOCAL}]
-                                + self.historico_local[-20:]}).encode("utf-8")
-            pedido = urllib.request.Request(OLLAMA_URL, data=corpo, headers={"Content-Type": "application/json"})
-            partes = []
-            try:
-                with urllib.request.urlopen(pedido, timeout=300) as resp:
-                    for linha in resp:
-                        if _contexto.trabalho['cancelado']:
-                            self.historico_local.pop()
-                            status = "cancelada"
-                            return
-                        ev = json.loads(linha)
-                        partes.append(ev.get("message", {}).get("content", ""))
-                        if ev.get("done"):
-                            break
-            except Exception as e:  # Ollama fechado, modelo ausente etc.
-                resposta = str(e)
-                self.historico_local.pop()
-                registrar("ERRO", f"Ollama: {e}")
-                emitir(evento="erro", texto=f"Ollama: {e}")
-                self.dizer("Não consegui falar com o Gemma. Veja se o Ollama está aberto, "
-                           "ou diga secretário, usar Claude.")
+            if provedores.MOTORES[motor]["tipo"] == "cli":
+                def ao_evento(evento):
+                    if evento["tipo"] == "processo":
+                        with self.trava:
+                            trabalho['proc'] = evento['proc']
+                            if trabalho['cancelado'] or not self.ativo:
+                                raise RuntimeError("Tarefa cancelada.")
+                    elif evento["tipo"] == "ferramenta":
+                        ferramentas.append(evento['nome'])
+                        emitir(evento="ferramenta", nome=nome_ferramenta(evento['nome']))
+                resultado = motores_cli.executar(
+                    motor, ctx + "\n\nPedido: " + comando if ctx else comando,
+                    ao_evento, sessao=None if trabalho['derivada'] else self.sessoes_cli.get(motor),
+                    prompt_sistema=PROMPT_VOZ)
+                if not trabalho['derivada'] and not trabalho['cancelado']:
+                    self.sessoes_cli[motor] = resultado['sessao']
+                resposta = resultado['resposta']
+            else:
+                def chamar(mensagens, imagens=None):
+                    if trabalho['cancelado'] or not self.ativo:
+                        raise RuntimeError("Tarefa cancelada.")
+                    saida = provedores.chamar_api(motor, mensagens, json=True, imagens=imagens)
+                    if trabalho['cancelado'] or not self.ativo:
+                        raise RuntimeError("Tarefa cancelada.")
+                    return saida
+                with self.trava:
+                    historico = list(self.historicos_api.get(motor, []))
+                    pendente = self.pendentes_api.pop(motor, None)
+                if pendente and re.match(r"^(sim|pode|confirmo)\b", normalizar(comando)):
+                    resultado = agente_local.confirmar(pendente)
+                else:
+                    resultado = agente_local.executar(comando, historico, memoria=ctx, chamar=chamar)
+                if trabalho['cancelado']:
+                    return
+                ferramentas = resultado['passos']
+                for nome in ferramentas:
+                    emitir(evento="ferramenta", nome=nome_ferramenta(nome))
+                resposta = resultado['texto']
+                with self.trava:
+                    if resultado.get('pendente'):
+                        self.pendentes_api[motor] = resultado['pendente']
+                    historico.extend([{"role": "user", "content": comando},
+                                      {"role": "assistant", "content": resposta}])
+                    self.historicos_api[motor] = historico[-20:]
+            if trabalho['cancelado']:
                 return
-            if _contexto.trabalho['cancelado']:
-                self.historico_local.pop()
-                status = "cancelada"
-                return
-            resposta = "".join(partes).strip() or "Pronto."
-            status = "ok"
-            self.historico_local.append({"role": "assistant", "content": resposta})
+            status = "erro" if resposta == agente_local.DESISTENCIA else "ok"
             self.mensagem("secretario", resposta)
             self.dizer(resposta)
             self.conversa_ate = time.monotonic() + JANELA_CONVERSA
         finally:
-            _contexto.trabalho.update(status_final='concluida' if status == 'ok' else 'erro', resposta_final=resposta)
-            fim_tarefa(tarefa_id, 'cancelada' if _contexto.trabalho['cancelado'] else status, resposta)
+            trabalho['proc'] = None
+            trabalho.update(status_final='concluida' if status == 'ok' else 'erro',
+                            resposta_final=resposta)
+            fim_tarefa(tarefa_id, 'cancelada' if trabalho['cancelado'] else status,
+                       resposta, ferramentas)
 
     def tarefa(self, comando):
         from registro import inicio_tarefa, fim_tarefa
         self.estado("pensando")
-        if _contexto.trabalho['motor'] == "gemma":
-            self.tarefa_local(comando)
+        motor = _contexto.trabalho['motor']
+        if motor not in provedores.MOTORES:
+            raise ValueError("Motor desconhecido.")
+        ctx = ""
+        try:
+            import memoria
+            ctx = memoria.contexto(comando)
+        except Exception as e:
+            registrar("ERRO", f"Contexto de memória: {e}")
+        if motor != "claude":
+            self.tarefa_provedor(comando, motor, ctx)
             return
+        if ctx:
+            comando = ctx + "\n\nPedido: " + comando
         tarefa_id = inicio_tarefa(comando, "claude")
         status = "erro"
         ferramentas = []
         resposta = None
         erro = ""
         try:
-            args = [CLAUDE, "-p", comando, "--output-format", "stream-json", "--verbose",
+            args = motores_cli.resolver_executavel(CLAUDE) + ["-p", comando, "--output-format", "stream-json", "--verbose",
                     "--permission-mode", "auto", "--append-system-prompt", PROMPT_VOZ]
             trabalho = _contexto.trabalho
             if trabalho['sessao']:
@@ -392,7 +436,12 @@ class Assistente:
         c = normalizar(comando)
         troca = TROCA_MOTOR.search(c)
         if troca and len(c.split()) <= 6:  # frase curta: é comando, não tarefa
-            self.trocar_motor("gemma" if troca.group(2).startswith(("gem", "jem")) else "claude")
+            nome = troca.group(1)
+            nome = {"cloud": "claude", "groque": "grok", "chat gpt": "gpt",
+                    "gemini cli": "gemini-cli", "jemini": "gemini"}.get(nome, nome)
+            if nome == "gemini" and not provedores.ler_chave("gemini"):
+                nome = "gemini-cli"
+            self.trocar_motor(nome)
         elif c.startswith(("cancela", "para", "pare")):
             numero = re.search(r'\b(\d+)\b', c)
             self.cancelar(id=int(numero.group(1)) if numero else None, tudo='tudo' in c)
@@ -405,7 +454,10 @@ class Assistente:
             self.sair()
         elif c.startswith("nova conversa"):
             self.sessao = None
-            self.historico_local = []
+            with self.trava:
+                self.historicos_api.clear()
+                self.sessoes_cli.clear()
+                self.pendentes_api.clear()
             emitir(evento="nova_conversa")
             self.dizer("Ok, conversa nova.")
         else:
@@ -421,7 +473,9 @@ class Assistente:
             with self.trava:
                 ocupado = bool(self.trabalhos)
                 if ARQ_MOTOR.exists():
-                    self.motor = ARQ_MOTOR.read_text(encoding='utf-8').strip() or 'claude'
+                    salvo = ARQ_MOTOR.read_text(encoding='utf-8').strip()
+                    if salvo in provedores.MOTORES:
+                        self.motor = salvo
                 for pedido in pedidos:
                     fila.adicionar(pedido, prioridade=prioridade, motor=self.motor)
                 self.emitir_fila()
@@ -464,6 +518,15 @@ class Assistente:
             if tipo == "texto" and cmd.get("texto", "").strip():
                 registrar("Você (texto)", cmd["texto"])
                 self.executar(cmd["texto"].strip())
+            elif tipo == "motor":
+                self.trocar_motor(cmd.get("valor"))
+            elif tipo == "chave":
+                try:
+                    provedores.salvar_chave(cmd.get("motor"), cmd.get("valor"))
+                except Exception:
+                    emitir(evento="erro", texto="Não foi possível salvar a chave.")
+                else:
+                    self.emitir_motores()
             elif tipo == "cancelar":
                 self.cancelar(id=cmd.get('id'))
             elif tipo == "mudo":
@@ -501,6 +564,7 @@ class Assistente:
         os._exit(0)  # pode ser chamado da thread que lê o app
 
     def rodar(self):
+        self.emitir_motores()
         fila.recuperar()
         self.emitir_fila()
         threading.Thread(target=self.falar_fila, daemon=True).start()

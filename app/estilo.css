@@ -239,3 +239,10 @@ kbd { font: 600 11px "Segoe UI", sans-serif; padding: 1px 6px; border-radius: 5p
 ::-webkit-scrollbar { width: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--fundo-4); border-radius: 5px; border: 3px solid transparent; background-clip: padding-box; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* escolha do motor */
+.seletor-motor { max-width: 200px; min-width: 120px; padding: 6px 10px; border-radius: 999px;
+  color: var(--texto); background: var(--fundo-2); border: 1px solid var(--linha); font: inherit; font-size: 12px; }
+.seletor-motor option, .seletor-motor optgroup { background: var(--fundo-2); color: var(--texto); }
+.seletor-motor option:disabled, .seletor-motor:disabled { color: var(--texto-3); }
+.seletor-motor:focus-visible { outline: 2px solid var(--menta); outline-offset: 2px; }
