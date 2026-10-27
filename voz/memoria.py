@@ -2,7 +2,7 @@
 
 import json
 import re
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 
@@ -181,6 +181,169 @@ def contexto(texto, cofre=COFRE, max_chars=1200):
         linha = f'- {nota["titulo"]}{assunto}' + (f": {resumo}." if resumo else "")
         links = por_caminho[nota["caminho"]]["links"]
         if links:  # hubs acumulam muitos links; poucos bastam para orientar o modelo
-            linha += " Ligado a: " + ", ".join(links[:5]) + ("…" if len(links) > 5 else "")
+            linha += (" " if resumo else ": ") + "Ligado a: " + ", ".join(links[:5]) + ("…" if len(links) > 5 else "")
         linhas.append(linha)
     return "\n".join(linhas)[:max(0, max_chars)]
+
+
+def _lista(valor):
+    return valor if isinstance(valor, list) else [valor] if valor else []
+
+
+def _unir(valores):
+    resultado = []
+    vistos = set()
+    for valor in valores:
+        valor = str(valor).strip()
+        chave = normalizar(valor)
+        if chave and chave not in vistos:
+            resultado.append(valor)
+            vistos.add(chave)
+    return resultado
+
+
+def _nome_conceito(nome):
+    nome = " ".join(str(nome).split()).title()
+    nome = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", nome).strip(" .")
+    if not nome:
+        raise ValueError("Nome de conceito vazio")
+    return nome
+
+
+def _campo_nota(texto, chave, valor):
+    if not texto.startswith("---\n") or "\n---\n" not in texto[4:]:
+        return f"---\n{chave}: {valor}\n---\n" + texto
+    fim = texto.index("\n---\n", 4)
+    campos = texto[4:fim]
+    padrao = rf"(?m)^{re.escape(chave)}:[^\n]*(?:\n[ \t]*- [^\n]*)*"
+    if re.search(padrao, campos):
+        campos = re.sub(padrao, lambda m: f"{chave}: {valor}", campos)
+    else:
+        campos += f"\n{chave}: {valor}"
+    return "---\n" + campos + texto[fim:]
+
+
+def _acrescentar_secao(texto, titulo, linhas):
+    if not linhas:
+        return texto
+    cabecalho = re.search(rf"(?m)^## {re.escape(titulo)}\s*$", texto)
+    if cabecalho:
+        proximo = re.search(r"(?m)^#{1,2} ", texto[cabecalho.end():])
+        fim = cabecalho.end() + proximo.start() if proximo else len(texto)
+        return texto[:fim].rstrip() + "\n" + "\n".join(linhas) + "\n\n" + texto[fim:]
+    return texto.rstrip() + f"\n\n## {titulo}\n" + "\n".join(linhas) + "\n"
+
+
+def _fatos_existentes(texto):
+    return {normalizar(linha) for linha in
+            re.findall(r"(?m)^- (?:\d{4}-\d{2}-\d{2} — )?(.+)$", texto)}
+
+
+def aprender(conhecimento: dict, cofre=COFRE, hoje=None) -> list[str]:
+    cofre = Path(cofre)
+    dia = (hoje or date.today()).isoformat()
+    antes = {p.relative_to(cofre).as_posix(): p.read_bytes()
+             for p in cofre.rglob("*.md")}
+    preparar_cofre(cofre)
+
+    def salvar(caminho, texto):
+        caminho.parent.mkdir(parents=True, exist_ok=True)
+        if not caminho.exists() or caminho.read_text(encoding="utf-8") != texto:
+            caminho.write_text(texto, encoding="utf-8")
+
+    def encontrar(nomes):
+        procurados = {normalizar(n) for n in nomes}
+        for caminho in sorted((cofre / "Conceitos").rglob("*.md")):
+            nota = ler_nota(caminho)
+            termos = [nota["titulo"], *_lista(nota["frontmatter"].get("aliases"))]
+            if procurados & {normalizar(n) for n in termos}:
+                return caminho
+        return None
+
+    def garantir_hub(caminho, assunto, resumo):
+        hub = cofre / "Assuntos" / f"{assunto}.md"
+        texto = hub.read_text(encoding="utf-8")
+        if normalizar(caminho.stem) not in {normalizar(n) for n in ler_nota(hub)["links"]}:
+            resumo = " ".join(resumo.split())
+            texto = _acrescentar_secao(texto, "Conceitos", [
+                f"- [[{caminho.stem}]]" + (f" — {resumo}" if resumo else "")])
+            salvar(hub, _campo_nota(texto, "atualizado", dia))
+
+    def criar(nome, assunto, resumo=""):
+        caminho = cofre / "Conceitos" / f"{_nome_conceito(nome)}.md"
+        salvar(caminho, f'---\ntipo: conceito\nassunto: "[[{assunto}]]"\n'
+               f'aliases: []\natualizado: {dia}\n---\n# {caminho.stem}\n\n'
+               f'{resumo}\n\n## Relacionados\n\n## Das conversas\n')
+        return caminho
+
+    for conceito in conhecimento.get("conceitos", []):
+        nome = str(conceito["nome"]).strip()
+        aliases = _unir(_lista(conceito.get("aliases")))
+        assunto = conceito.get("assunto")
+        if assunto not in ASSUNTOS:
+            assunto = "Outros"
+        caminho = encontrar([nome, *aliases])
+        if caminho is None:
+            caminho = criar(nome, assunto, str(conceito.get("resumo", "")))
+        nota = ler_nota(caminho)
+        assunto_existente = str(nota["frontmatter"].get("assunto", "")).strip("[]")
+        if assunto_existente in ASSUNTOS:
+            assunto = assunto_existente
+        texto = caminho.read_text(encoding="utf-8-sig")
+        aliases = _unir([*_lista(nota["frontmatter"].get("aliases")), *aliases,
+                         *([nome] if normalizar(nome) != normalizar(caminho.stem) else [])])
+        texto = _campo_nota(texto, "aliases", json.dumps(aliases, ensure_ascii=False))
+        texto = _campo_nota(texto, "atualizado", dia)
+        salvar(caminho, texto)
+        ligados = {normalizar(n) for n in nota["links"]}
+        novos = []
+        for relacionado in _unir(_lista(conceito.get("relacionados"))):
+            destino = encontrar([relacionado])
+            if destino is None:
+                destino = criar(relacionado, assunto)
+            if destino == caminho:
+                continue
+            nota_destino = ler_nota(destino)
+            assunto_destino = str(nota_destino["frontmatter"].get("assunto", "")).strip("[]")
+            garantir_hub(destino, assunto_destino if assunto_destino in ASSUNTOS else assunto,
+                         nota_destino["resumo"])
+            if normalizar(destino.stem) not in ligados:
+                novos.append(f"- [[{destino.stem}]]")
+                ligados.add(normalizar(destino.stem))
+            # ligação de volta: quem pergunta só sobre a Bíblia também chega a Jesus Cristo
+            if normalizar(caminho.stem) not in {normalizar(n) for n in nota_destino["links"]}:
+                salvar(destino, _acrescentar_secao(destino.read_text(encoding="utf-8"),
+                                                   "Relacionados", [f"- [[{caminho.stem}]]"]))
+        texto = _acrescentar_secao(texto, "Relacionados", novos)
+        fato = " ".join(str(conceito.get("fato", "")).split())
+        if fato and normalizar(fato) not in _fatos_existentes(texto):
+            texto = _acrescentar_secao(texto, "Das conversas", [f"- {dia} — {fato}"])
+        salvar(caminho, texto)
+        garantir_hub(caminho, assunto, nota["resumo"])
+
+    perfil = cofre / "Perfil" / "Aprendizados.md"
+    texto = perfil.read_text(encoding="utf-8") if perfil.exists() else "# Aprendizados\n"
+    fatos = _fatos_existentes(texto)
+    for fato in conhecimento.get("fatos_usuario", []):
+        fato = " ".join(str(fato).split())
+        if fato and normalizar(fato) not in fatos:
+            texto = texto.rstrip() + f"\n- {dia} — {fato}\n"
+            fatos.add(normalizar(fato))
+    if fatos:
+        salvar(perfil, texto)
+    indexar(cofre)
+    return sorted(p.relative_to(cofre).as_posix() for p in cofre.rglob("*.md")
+                  if antes.get(p.relative_to(cofre).as_posix()) != p.read_bytes())
+
+
+def registrar_diario(pergunta, resposta, cofre=COFRE, agora=None):
+    agora = agora or datetime.now()
+    dia = agora.date().isoformat()
+    caminho = Path(cofre) / "Diário" / f"{dia}.md"
+    caminho.parent.mkdir(parents=True, exist_ok=True)
+    if not caminho.exists():
+        caminho.write_text(f"# {dia}\n\n", encoding="utf-8")
+    pergunta = " ".join(str(pergunta).split())[:300]
+    resposta = " ".join(str(resposta).split())[:300]
+    with caminho.open("a", encoding="utf-8") as arquivo:
+        arquivo.write(f'- {agora:%H:%M} — **Você:** {pergunta} → **Secretário:** {resposta}\n')

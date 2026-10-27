@@ -6,6 +6,7 @@ import re
 import sys
 import types
 import unicodedata
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -150,3 +151,80 @@ def test_contexto_respeita_limite(cofre, memoria):
     assert "Ligado a: Religião, Bíblia" in completo
     for limite in (0, 1, 40, 1200):
         assert memoria.contexto("Jesus", cofre, max_chars=limite) == completo[:limite]
+
+
+def test_aprender_cria_conceito_hub_e_indice(tmp_path, memoria):
+    alterados = memoria.aprender({"conceitos": [{
+        "nome": "jesus cristo", "assunto": "Religião", "resumo": "Figura central.",
+        "aliases": ["Jesus"], "fato": "Conversamos sobre suas parábolas.",
+    }]}, tmp_path, hoje=date(2026, 10, 20))
+    caminho = tmp_path / "Conceitos/Jesus Cristo.md"
+    nota = memoria.ler_nota(caminho)
+    assert nota["resumo"] == "Figura central."
+    assert nota["frontmatter"]["atualizado"] == "2026-10-20"
+    assert "- 2026-10-20 — Conversamos sobre suas parábolas." in caminho.read_text(encoding="utf-8")
+    hub = (tmp_path / "Assuntos/Religião.md").read_text(encoding="utf-8")
+    assert "- [[Jesus Cristo]] — Figura central." in hub
+    assert "Conceitos/Jesus Cristo.md" in alterados
+    assert "Assuntos/Religião.md" in alterados
+    assert memoria.buscar("Jesus", tmp_path)
+
+
+def test_aprender_alias_preserva_resumo_e_deduplica(cofre, memoria):
+    conhecimento = {"conceitos": [{
+        "nome": "JESUS", "assunto": "Religião", "resumo": "Resumo substituto.",
+        "aliases": ["Salvador", "cristo"], "relacionados": ["Escrituras", "BÍBLIA"],
+        "fato": "Deivid leu as parábolas.",
+    }], "fatos_usuario": ["Gosta de estudar.", "gosta de estudar."]}
+    memoria.aprender(conhecimento, cofre, hoje=date(2026, 10, 20))
+    conhecimento["conceitos"][0]["nome"] = "salvador"
+    conhecimento["conceitos"][0]["aliases"] = ["Mestre"]
+    memoria.aprender(conhecimento, cofre, hoje=date(2026, 10, 21))
+    caminho = cofre / "Conceitos/Jesus Cristo.md"
+    texto = caminho.read_text(encoding="utf-8")
+    nota = memoria.ler_nota(caminho)
+    assert {p.stem for p in (cofre / "Conceitos").glob("*.md")} == {"Jesus Cristo", "Bíblia"}
+    assert nota["resumo"] == "Figura central do cristianismo."
+    assert {memoria.normalizar(a) for a in nota["frontmatter"]["aliases"]} == {
+        "jesus", "cristo", "salvador", "mestre"}
+    assert nota["frontmatter"]["atualizado"] == "2026-10-21"
+    assert texto.count("Deivid leu as parábolas.") == 1
+    assert texto.count("[[Bíblia") == 1
+    assert (cofre / "Assuntos/Religião.md").read_text(encoding="utf-8").count("[[Jesus Cristo]]") == 1
+    perfil = (cofre / "Perfil/Aprendizados.md").read_text(encoding="utf-8")
+    assert perfil.count("—") == 1
+    assert "2026-10-20 — Gosta de estudar." in perfil
+
+
+def test_aprender_relacionado_minimo_e_assunto_invalido(tmp_path, memoria):
+    memoria.aprender({"conceitos": [{
+        "nome": "Python", "assunto": "Inexistente", "resumo": "Uma linguagem.",
+        "relacionados": ["programação", "PROGRAMAÇÃO"],
+    }]}, tmp_path, hoje=date(2026, 10, 20))
+    for nome in ("Python", "Programação"):
+        nota = memoria.ler_nota(tmp_path / "Conceitos" / f"{nome}.md")
+        assert nota["frontmatter"]["assunto"] == "[[Outros]]"
+    texto = (tmp_path / "Conceitos/Python.md").read_text(encoding="utf-8")
+    assert texto.count("- [[Programação]]") == 1
+    hub = (tmp_path / "Assuntos/Outros.md").read_text(encoding="utf-8")
+    assert "[[Python]]" in hub
+    assert "[[Programação]]" in hub
+
+
+def test_aprender_reindexa_e_retorna_so_alterados(cofre, memoria, monkeypatch):
+    chamadas = []
+    monkeypatch.setattr(memoria, "indexar", lambda destino: chamadas.append(destino))
+    assert memoria.aprender({}, cofre, hoje=date(2026, 10, 20)) == []
+    assert chamadas == [cofre]
+
+
+def test_diario_acumula_e_limita_cada_lado(tmp_path, memoria):
+    memoria.registrar_diario("Pergunta\nem duas linhas", "Resposta", tmp_path,
+                             agora=datetime(2026, 10, 20, 9, 5))
+    memoria.registrar_diario("p" * 350, "r" * 350, tmp_path,
+                             agora=datetime(2026, 10, 20, 10, 15))
+    linhas = (tmp_path / "Diário/2026-10-20.md").read_text(encoding="utf-8").splitlines()
+    assert linhas[0] == "# 2026-10-20"
+    assert linhas[2] == "- 09:05 — **Você:** Pergunta em duas linhas → **Secretário:** Resposta"
+    assert linhas[3] == "- 10:15 — **Você:** " + "p" * 300 + " → **Secretário:** " + "r" * 300
+    assert len(list((tmp_path / "Diário").glob("*.md"))) == 1
