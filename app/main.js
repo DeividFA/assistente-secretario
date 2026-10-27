@@ -17,6 +17,18 @@ const CONFIG_OBSIDIAN = path.join(app.getPath('appData'), 'obsidian', 'obsidian.
 let janela = null;
 let bandeja = null;
 let motor = null;
+let reiniciando = false; // reinício pedido de propósito (não é erro)
+
+// O python.exe do venv é só um lançador que abre o Python real como filho:
+// matar só ele deixaria o motor órfão segurando o microfone. Mata a árvore toda.
+function matarMotor() {
+  if (motor) spawn('taskkill', ['/pid', String(motor.pid), '/T', '/F'], { windowsHide: true });
+}
+function reiniciarMotor() {
+  if (!motor) return;
+  reiniciando = true;
+  matarMotor();
+}
 let saindo = false;
 let estadoAtual = 'carregando';
 let mudo = false;
@@ -63,7 +75,7 @@ function atualizarBandeja() {
     { label: 'Microfone mudo', type: 'checkbox', checked: mudo, click: (i) => alternarMudo(i.checked) },
     { label: 'Abrir memória (Obsidian)', click: abrirObsidian },
     { type: 'separator' },
-    { label: 'Reiniciar motor de voz', click: () => { if (motor) motor.kill(); } },
+    { label: 'Reiniciar motor de voz', click: reiniciarMotor },
     { label: 'Sair', click: () => { saindo = true; app.quit(); } },
   ]));
 }
@@ -139,7 +151,13 @@ function iniciarMotor() {
     estadoAtual = 'parado';
     atualizarBandeja();
     if (saindo) return;
-    if (janela) janela.webContents.send('evento', { evento: 'erro', texto: `Motor de voz parou (código ${codigo}). Reiniciando…\n${erros.slice(-400)}` });
+    if (janela) {
+      const ev = reiniciando
+        ? { evento: 'mensagem', autor: 'sistema', texto: 'Reiniciando o motor de voz…' }
+        : { evento: 'erro', texto: `Motor de voz parou (código ${codigo}). Reiniciando…\n${erros.slice(-400)}` };
+      janela.webContents.send('evento', ev);
+    }
+    reiniciando = false;
     setTimeout(() => { iniciarMotor(); if (mudo) enviarAoMotor({ cmd: 'mudo', valor: true }); }, 3000);
   });
 }
@@ -168,6 +186,6 @@ app.whenReady().then(() => {
   globalShortcut.register('Control+Shift+S', () => (janela.isVisible() && janela.isFocused() ? janela.hide() : mostrar()));
 });
 
-app.on('before-quit', () => { saindo = true; enviarAoMotor({ cmd: 'sair' }); setTimeout(() => motor && motor.kill(), 1500); });
+app.on('before-quit', () => { saindo = true; enviarAoMotor({ cmd: 'sair' }); setTimeout(matarMotor, 1500); });
 app.on('will-quit', () => globalShortcut.unregisterAll());
 app.on('window-all-closed', (e) => e.preventDefault());
