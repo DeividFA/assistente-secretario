@@ -27,6 +27,7 @@ import delegacao
 import provedores
 import backup
 import vozes
+import segundo_plano
 
 pyautogui.FAILSAFE = True  # mouse no canto superior esquerdo aborta qualquer ação
 pyautogui.PAUSE = 0.15
@@ -205,6 +206,44 @@ def _real(x, y):
 
 
 @mcp.tool()
+def capturar_janela(titulo: str):
+    """Captura uma janela restaurada por trás das outras, sem trocar o foco."""
+    try:
+        caminho = segundo_plano.capturar_janela(titulo, _arquivo("janela"))
+        return [f"Janela salva em {caminho}", Image(path=str(caminho))]
+    except Exception as erro:
+        return str(erro)
+
+
+@mcp.tool()
+def ler_janela(titulo: str, limite: int = 4000) -> str:
+    """Lista elementos UI Automation com índices a partir de zero, sem trocar o foco."""
+    try:
+        return segundo_plano.ler_janela(titulo, limite)
+    except Exception as erro:
+        return f"Não consegui ler por UI Automation: {erro}"
+
+
+@mcp.tool()
+def preencher_campo(titulo: str, alvo: str, texto: str) -> str:
+    """Preenche via ValuePattern; alvo é índice, nome ou automation_id da última leitura."""
+    try:
+        return segundo_plano.preencher_campo(titulo, alvo, texto)
+    except Exception as erro:
+        return f"Não consegui preencher por UI Automation: {erro}"
+
+
+@mcp.tool()
+def acionar(titulo: str, alvo: str) -> str:
+    """Aciona Invoke, Toggle ou SelectionItem, sem simular mouse ou teclado."""
+    try:
+        return segundo_plano.acionar(titulo, alvo)
+    except Exception as erro:
+        return f"Não consegui acionar por UI Automation: {erro}"
+
+
+@mcp.tool()
+@segundo_plano.fisica
 def clicar(x: int, y: int, botao: str = "left", cliques: int = 1) -> str:
     """Clica na posição (x, y) da última captura_tela(). botao: left, right ou middle."""
     rx, ry = _real(x, y)
@@ -213,6 +252,7 @@ def clicar(x: int, y: int, botao: str = "left", cliques: int = 1) -> str:
 
 
 @mcp.tool()
+@segundo_plano.fisica
 def arrastar(x1: int, y1: int, x2: int, y2: int) -> str:
     """Arrasta o mouse de (x1, y1) até (x2, y2), em coordenadas da última captura_tela()."""
     a, b = _real(x1, y1), _real(x2, y2)
@@ -222,16 +262,19 @@ def arrastar(x1: int, y1: int, x2: int, y2: int) -> str:
 
 
 @mcp.tool()
+@segundo_plano.fisica
 def digitar(texto: str, enter: bool = False) -> str:
     """Digita o texto no campo que está em foco (aceita acentos). enter=True aperta Enter no fim."""
     pyperclip.copy(texto)
     pyautogui.hotkey("ctrl", "v")
+    time.sleep(0.2)  # deixa o aplicativo consumir o texto antes de restaurar
     if enter:
         pyautogui.press("enter")
     return "digitado"
 
 
 @mcp.tool()
+@segundo_plano.fisica
 def teclas(combinacao: str) -> str:
     """Pressiona uma tecla ou atalho, ex.: "enter", "ctrl+c", "alt+tab", "win+d", "ctrl+shift+esc"."""
     partes = [p.strip().lower() for p in combinacao.split("+")]
@@ -240,6 +283,7 @@ def teclas(combinacao: str) -> str:
 
 
 @mcp.tool()
+@segundo_plano.fisica
 def rolar(quantidade: int) -> str:
     """Rola a tela na posição do mouse. Positivo sobe, negativo desce (1 = um "clique" da roda)."""
     pyautogui.scroll(quantidade * 120)
@@ -261,6 +305,7 @@ def janelas() -> list[str]:
 
 
 @mcp.tool()
+@segundo_plano.fisica
 def focar_janela(titulo_parcial: str) -> str:
     """Traz para frente a primeira janela cujo título contém o texto informado."""
     for janela in pygetwindow.getAllWindows():

@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import quote_plus
 
 from comum import normalizar
+from segundo_plano import OCUPADO
 
 
 def _sentidos(nome, *args, **kwargs):
@@ -170,6 +171,8 @@ def executar(nome, args, pedido="") -> dict:
         ):
             raise ValueError("A câmera só pode ser usada quando solicitada no pedido.")
         resultado = funcao(**args)
+        if resultado == OCUPADO:
+            return {"ok": False, "texto": OCUPADO, "imagem": None}
         imagem = str(resultado) if nome in ("ver_tela", "foto_camera") else None
         return {"ok": True, "texto": str(resultado), "imagem": imagem}
     except Exception as erro:
