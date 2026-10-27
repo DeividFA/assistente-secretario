@@ -33,6 +33,11 @@ from datetime import datetime
 from pathlib import Path
 
 import fila
+
+# O servidor MCP "sentidos" pode levar mais de 30 s para subir com o PC ocupado (Whisper,
+# navegador): o Claude desistia por CONNECT_TIMEOUT e ficava sem as ferramentas do PC.
+# As sessões do Claude (e delegações) herdam este limite maior.
+os.environ.setdefault("MCP_TIMEOUT", "120000")
 import backup
 import registro
 import diagnostico
