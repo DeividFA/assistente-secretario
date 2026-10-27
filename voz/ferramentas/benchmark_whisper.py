@@ -52,6 +52,21 @@ def gerar_audios(pasta):
         voz.stop()
 
 
+def carregar_wav(caminho):
+    """WAV → float32 mono 16 kHz, como o motor entrega ao Whisper (abrir o arquivo pelo
+    caminho passaria pelo PyAV, que nesta instalação é incompatível)."""
+    import numpy as np
+
+    with wave.open(str(caminho), "rb") as audio:
+        taxa, canais = audio.getframerate(), audio.getnchannels()
+        dados = np.frombuffer(audio.readframes(audio.getnframes()), dtype=np.int16)
+    dados = dados.astype("float32") / 32768
+    if canais > 1:
+        dados = dados.reshape(-1, canais).mean(axis=1)
+    destino = np.linspace(0, len(dados) - 1, int(len(dados) * 16000 / taxa))
+    return np.interp(destino, np.arange(len(dados)), dados).astype("float32")
+
+
 def medir_modelo(nome, caminhos):
     from faster_whisper import WhisperModel
 
@@ -64,7 +79,7 @@ def medir_modelo(nome, caminhos):
         for numero, caminho in enumerate(caminhos, 1):
             inicio = time.perf_counter()
             segmentos, _ = modelo.transcribe(
-                str(caminho), language="pt", beam_size=1,
+                carregar_wav(caminho), language="pt", beam_size=1,
                 condition_on_previous_text=False,
             )
             # A transcrição só ocorre ao consumir o gerador de segmentos.
