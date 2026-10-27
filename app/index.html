@@ -18,6 +18,7 @@
       <button class="trilho-item ativo" title="Conversas">
         <img src="icones/app.svg" alt="">
       </button>
+      <button class="trilho-item acao" id="btn-problemas" title="Problemas">&#9888; <span id="contador-problemas">0</span></button>
       <div class="separador"></div>
       <button class="trilho-item acao" id="btn-obsidian" title="Abrir memória no Obsidian">
         <svg viewBox="0 0 24 24"><path d="M12 3.5c-2.6 0-4.5 1.9-4.5 4.3 0 .5-.4.9-.9 1A3.3 3.3 0 0 0 4 12.1c0 1.2.6 2.2 1.6 2.8.3.2.5.6.4 1-.1.3-.1.6-.1.9a3.6 3.6 0 0 0 6.1 2.6m0-15.9c2.6 0 4.5 1.9 4.5 4.3 0 .5.4.9.9 1a3.3 3.3 0 0 1 2.6 3.3c0 1.2-.6 2.2-1.6 2.8-.3.2-.5.6-.4 1 .1.3.1.6.1.9a3.6 3.6 0 0 1-6.1 2.6m0-15.9v15.9"/></svg>
@@ -124,6 +125,11 @@
     <div class="vozes-topo"><h2 id="titulo-vozes">Voz de resposta</h2><button id="fechar-vozes" class="botao-fantasma">Fechar</button></div>
     <p>Vozes Edge: usa internet; o texto é enviado à Microsoft.</p>
     <div id="lista-vozes"></div>
+  </dialog>
+  <dialog id="painel-problemas" aria-labelledby="titulo-problemas">
+    <div class="vozes-topo"><h2 id="titulo-problemas">Problemas</h2><button id="fechar-problemas">Fechar</button></div>
+    <p>Corrigir pede sua confirmação na conversa antes de começar.</p>
+    <div id="lista-problemas"></div>
   </dialog>
   <script src="renderer.js"></script>
 </body>

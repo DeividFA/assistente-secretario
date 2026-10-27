@@ -337,6 +337,7 @@ $('fechar-vozes').onclick = () => $('painel-vozes').close();
 
 window.secretario.aoEvento((ev) => {
   switch (ev.evento) {
+    case 'bugs': mostrarProblemas(ev.lista); break;
     case 'microfone':
       $('modo-microfone').value = ev.modo;
       $('microfone-estado').textContent = ev.aviso || (ev.estado === 'liberado'
@@ -433,3 +434,41 @@ window.secretario.estado().then(({ estado, mudo, motores, vozes }) => {
   $('btn-mudo').classList.toggle('desligado', mudo);
   window.secretario.enviar({ cmd: 'sessao', id: atual().sessao });
 });
+
+function mostrarProblemas(bugs) {
+  $('contador-problemas').textContent = bugs.filter((b) => !['corrigido', 'ignorado'].includes(b.estado)).length;
+  $('lista-problemas').replaceChildren();
+  for (const bug of bugs) {
+    const artigo = document.createElement('article');
+    const titulo = document.createElement('h3');
+    titulo.textContent = '#' + bug.id + ' · ' + bug.resumo;
+    const quando = document.createElement('p');
+    quando.textContent = bug.ultima_vez + ' · ' + bug.ocorrencias + ' ocorrências · ' + bug.estado;
+    const detalhes = document.createElement('details');
+    const resumo = document.createElement('summary');
+    resumo.textContent = 'Traceback e contexto';
+    const rastro = document.createElement('pre');
+    rastro.textContent = bug.traceback + '\n' + bug.contexto;
+    detalhes.append(resumo, rastro);
+    const label = document.createElement('label');
+    label.textContent = 'Orientação';
+    const campo = document.createElement('textarea');
+    campo.maxLength = 1000;
+    campo.value = bug.diretriz || '';
+    label.appendChild(campo);
+    artigo.append(titulo, quando, detalhes, label);
+    for (const [rotulo, cmd] of [['Corrigir', 'corrigir_bug'], ['Ignorar', 'ignorar_bug']]) {
+      const botao = document.createElement('button');
+      botao.textContent = rotulo;
+      botao.disabled = ['corrigido', 'corrigindo', 'ignorado'].includes(bug.estado);
+      botao.onclick = () => window.secretario.enviar({ cmd, id: bug.id, diretriz: campo.value });
+      artigo.appendChild(botao);
+    }
+    $('lista-problemas').appendChild(artigo);
+  }
+}
+$('btn-problemas').onclick = () => {
+  $('painel-problemas').showModal();
+  window.secretario.enviar({ cmd: 'bugs' });
+};
+$('fechar-problemas').onclick = () => $('painel-problemas').close();

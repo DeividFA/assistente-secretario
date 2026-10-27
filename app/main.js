@@ -2,7 +2,7 @@
 // atalhos globais e o motor de voz (Python) rodando escondido em segundo plano.
 
 const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, Notification, nativeImage, shell } = require('electron');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
@@ -36,6 +36,40 @@ let mudo = false;
 let motores = { lista: [], atual: null };
 let vozes = { lista: [], atual: 'windows' };
 let emChamada = false;
+const REPO = path.join(VOZ, '..');
+const MARCA_REPARO = path.join(SINAIS, 'ultimo_reparo.json');
+let quedasReparo = [];
+
+function git(args) {
+  return new Promise((resolve, reject) => execFile('git', args,
+    { cwd: REPO, windowsHide: true, timeout: 30000 },
+    (erro, stdout) => erro ? reject(erro) : resolve(stdout.trim())));
+}
+
+async function recuperarReparo() {
+  try {
+    if (!fs.existsSync(MARCA_REPARO)) return;
+    const reparo = JSON.parse(fs.readFileSync(MARCA_REPARO, 'utf8'));
+    if (!/^[a-f0-9]{40}$/.test(reparo.commit)) return;
+    quedasReparo = quedasReparo.filter((ts) => Date.now() - ts < 300000);
+    quedasReparo.push(Date.now());
+    if (quedasReparo.length < 2) return;
+    if (await git(['status', '--porcelain']) || (await git(['branch', '--show-current'])).startsWith('reparo/')
+        || await git(['rev-parse', 'HEAD']) !== reparo.commit) throw new Error('Repositório mudou após o reparo; reversão suspensa.');
+    await git(['revert', '--no-edit', reparo.commit]);
+    if (Number.isInteger(reparo.id)) {
+      await new Promise((resolve, reject) => execFile(PYTHON,
+        ['-c', 'import registro,sys; registro.atualizar_bug(int(sys.argv[1]), estado="falhou")', String(reparo.id)],
+        { cwd: VOZ, windowsHide: true, timeout: 30000 }, (erro) => erro ? reject(erro) : resolve()));
+    }
+    fs.unlinkSync(MARCA_REPARO);
+    quedasReparo = [];
+    if (janela) janela.webContents.send('evento', { evento: 'mensagem', autor: 'sistema',
+      texto: 'O motor caiu duas vezes. Desfiz o último reparo e vou reiniciar.' });
+  } catch (erro) {
+    if (janela) janela.webContents.send('evento', { evento: 'erro', texto: 'Não consegui desfazer o reparo: ' + erro.message });
+  }
+}
 
 function reiniciarSecretario(completo) {
   if (saindo) return;
@@ -163,9 +197,22 @@ function iniciarMotor() {
   motor = spawn(PYTHON, ['assistente_voz.py', '--ipc'], {
     cwd: VOZ, windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1' },
   });
+  const estavel = setTimeout(async () => {
+    try {
+      if (!await git(['status', '--porcelain']) && !(await git(['branch', '--show-current'])).startsWith('reparo/')) {
+        await git(['tag', '-f', 'estavel']);
+        if (fs.existsSync(MARCA_REPARO)) fs.unlinkSync(MARCA_REPARO);
+      }
+    } catch (erro) { console.error('Não consegui marcar a versão estável:', erro); }
+  }, 30 * 60 * 1000);
   readline.createInterface({ input: motor.stdout }).on('line', (linha) => {
     let ev;
     try { ev = JSON.parse(linha); } catch { return; }
+    if (ev.evento === 'reparo') {
+      fs.mkdirSync(SINAIS, { recursive: true });
+      fs.writeFileSync(MARCA_REPARO, JSON.stringify({ commit: ev.commit, id: ev.id }));
+      quedasReparo = [];
+    }
     if (ev.evento === 'microfone') emChamada = Boolean(ev.app);
     if (ev.evento === 'motores') { motores = { lista: ev.lista, atual: ev.atual }; atualizarBandeja(); }
     if (ev.evento === 'vozes') vozes = { lista: ev.lista, atual: ev.atual };
@@ -179,8 +226,16 @@ function iniciarMotor() {
     if (janela) janela.webContents.send('evento', ev);
   });
   let erros = '';
-  motor.stderr.on('data', (d) => { erros = (erros + d.toString()).slice(-2000); });
-  motor.on('exit', (codigo) => {
+  motor.stderr.on('data', (d) => { erros = (erros + d.toString()).split(/\r?\n/).slice(-50).join('\n').slice(-32000); });
+  motor.on('exit', async (codigo) => {
+    clearTimeout(estavel);
+    const queda = !saindo && !reiniciando;
+    if (queda) {
+      fs.mkdirSync(SINAIS, { recursive: true });
+      fs.writeFileSync(path.join(SINAIS, 'bug_' + Date.now() + '.json'),
+        JSON.stringify({ codigo, stderr: erros }));
+      await recuperarReparo();
+    }
     motor = null;
     estadoAtual = 'parado';
     atualizarBandeja();

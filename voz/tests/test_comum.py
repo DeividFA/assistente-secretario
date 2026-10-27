@@ -33,6 +33,10 @@ def test_texto_para_fala(texto, esperado):
     assert texto_para_fala(texto) == esperado
 
 
+def test_texto_para_fala_remove_tachado_preservando_texto():
+    assert texto_para_fala("Antes ~~texto tachado~~ depois ~") == "Antes texto tachado depois ~"
+
+
 def test_texto_para_fala_preserva_limite_exato():
     texto = "a" * 700
     assert texto_para_fala(texto) == texto

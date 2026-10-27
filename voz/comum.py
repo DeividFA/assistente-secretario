@@ -356,6 +356,7 @@ def texto_para_fala(texto, limite=700):
     t = re.sub(r"```.*?```", " ", texto, flags=re.S)
     t = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", t)
     t = re.sub(r"https?://\S+", "link", t)
+    t = t.replace("~~", "")
     t = re.sub(r"[*_`#>|]", "", t)
     t = re.sub(r"^\s*-{3,}\s*$", "", t, flags=re.M)
     t = re.sub(r"\s+", " ", t).strip()

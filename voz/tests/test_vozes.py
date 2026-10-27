@@ -250,6 +250,8 @@ def test_comando_pede_confirmacao_e_ativa_apos_download(pasta, monkeypatch):
     assistente.voz_pendente = None
     assistente.restauro_pendente = None
     assistente.banco_falho = False
+    assistente.reparo_pendente = None
+    assistente.reinicio_reparo = False
     falas, downloads = [], []
     assistente.dizer = falas.append
     assistente.mensagem = lambda *args: None

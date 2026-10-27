@@ -33,6 +33,8 @@ from pathlib import Path
 import fila
 import backup
 import registro
+import diagnostico
+import reparo
 import agente_local
 import motores_cli
 import provedores
@@ -104,6 +106,8 @@ def registrar(quem, texto):
     try:
         evento(quem, texto)
     except Exception as e:  # o log no banco nunca pode derrubar o motor
+        diagnostico.registrar_bug("motor", e, e.__traceback__,
+                                 {"motor": getattr(_contexto, "trabalho", {}).get("motor", "")})
         print(f"registro SQLite falhou: {e}", file=sys.stderr)
 
 
@@ -142,6 +146,9 @@ class Assistente:
         self.restauro_pendente = None  # nome do backup aguardando o "sim"
         self.voz_pendente = None
         self.downloads_voz = set()
+        self.reparo_pendente = None
+        self.reparando = False
+        self.reinicio_reparo = False
 
     @property
     def ocupado(self):
@@ -156,7 +163,7 @@ class Assistente:
             self.acordar.clear()
             try:
                 with self.trava:
-                    pendentes = [t for t in fila.listar() if t['status'] == 'pendente']
+                    pendentes = [] if self.reparando else [t for t in fila.listar() if t['status'] == 'pendente']
                     if pendentes:
                         motor = pendentes[0]['motor']
                         locais = any(t['motor'] == 'gemma' for t in self.trabalhos.values())
@@ -176,6 +183,9 @@ class Assistente:
                                 threading.Thread(target=self.trabalhar, args=(tarefa,), daemon=True).start()
                                 continue
             except Exception as e:
+                diagnostico.registrar_bug("motor", e, e.__traceback__,
+                                         {"motor": getattr(self, "motor", ""),
+                                          "pedido": getattr(_contexto, "trabalho", {}).get("comando", "")})
                 registrar('ERRO', f'Executor da fila: {e}')
             self.acordar.wait(0.5)
 
@@ -187,6 +197,9 @@ class Assistente:
             if not trabalho['cancelado']:
                 self.tarefa(trabalho['comando'])
         except Exception as e:
+            diagnostico.registrar_bug("motor", e, e.__traceback__,
+                                     {"motor": getattr(self, "motor", ""),
+                                          "pedido": getattr(_contexto, "trabalho", {}).get("comando", "")})
             registrar('ERRO', str(e))
             trabalho['resposta_final'] = str(e)
             emitir(evento='erro', texto=str(e))
@@ -210,6 +223,9 @@ class Assistente:
                     if tarefa is not None and 'voz_amostra' not in tarefa:
                         self.conversa_ate = time.monotonic() + JANELA_CONVERSA
             except Exception as e:
+                diagnostico.registrar_bug("motor", e, e.__traceback__,
+                                         {"motor": getattr(self, "motor", ""),
+                                          "pedido": getattr(_contexto, "trabalho", {}).get("comando", "")})
                 registrar('ERRO', f'Fala: {e}')
             finally:
                 pronto.set()
@@ -289,6 +305,9 @@ class Assistente:
                     vozes.usar(id)
                 emitir(evento="download_voz", id=id, feito=1, total=1)
             except Exception as erro:
+                diagnostico.registrar_bug("motor", erro, erro.__traceback__,
+                                         {"motor": getattr(self, "motor", ""),
+                                          "pedido": getattr(_contexto, "trabalho", {}).get("comando", "")})
                 emitir(evento="erro", id=id, texto=f"Não consegui baixar a voz: {erro}")
             finally:
                 with self.trava:
@@ -397,6 +416,9 @@ class Assistente:
             import memoria
             ctx = memoria.contexto(comando)
         except Exception as e:
+            diagnostico.registrar_bug("motor", e, e.__traceback__,
+                                     {"motor": getattr(self, "motor", ""),
+                                          "pedido": getattr(_contexto, "trabalho", {}).get("comando", "")})
             registrar("ERRO", f"Contexto de memória: {e}")
         if motor != "claude":
             self.tarefa_provedor(comando, motor, ctx)
@@ -406,6 +428,7 @@ class Assistente:
         tarefa_id = inicio_tarefa(comando, "claude")
         status = "erro"
         ferramentas = []
+        nomes_ferramentas = {}
         resposta = None
         erro = ""
         try:
@@ -440,9 +463,15 @@ class Assistente:
                     for bloco in ev.get("message", {}).get("content", []):
                         if bloco.get("type") == "tool_use":
                             nome = bloco.get("name", "")
+                            nomes_ferramentas[bloco.get("id")] = nome
                             if nome and nome not in ferramentas:
                                 ferramentas.append(nome)
                             emitir(evento="ferramenta", nome=nome_ferramenta(bloco.get("name", "")))
+                elif ev.get("type") == "user":
+                    for bloco in ev.get("message", {}).get("content", []):
+                        if isinstance(bloco, dict) and bloco.get("type") == "tool_result":
+                            nome = nomes_ferramentas.get(bloco.get('tool_use_id'), 'desconhecida')
+                            registro.evento('Ferramenta', nome + ':' + ('erro' if bloco.get('is_error') else 'ok'))
                 elif ev.get("type") == "result":
                     resposta = ev.get("result")
                     status = "erro" if ev.get("is_error") else "ok"
@@ -461,6 +490,9 @@ class Assistente:
             self.dizer(resposta)
             self.conversa_ate = time.monotonic() + JANELA_CONVERSA
         except Exception as e:
+            diagnostico.registrar_bug("motor", e, e.__traceback__,
+                                     {"motor": getattr(self, "motor", ""),
+                                          "pedido": getattr(_contexto, "trabalho", {}).get("comando", "")})
             erro = str(e)
             status = "erro"
             raise
@@ -500,6 +532,41 @@ class Assistente:
     def executar(self, comando):
         """Trata comandos de controle ou dispara uma tarefa."""
         c = normalizar(comando)
+        if self.reparo_pendente and c.startswith('orientacao:'):
+            id, _ = self.reparo_pendente
+            self.pedir_reparo(id, comando.split(':', 1)[1].strip())
+            return
+        if self.reparo_pendente and re.match(r"^(?:sim|pode|confirmo|nao)(?:[.!?,]|$)", c):
+            id, diretriz = self.reparo_pendente
+            self.reparo_pendente = None
+            if c.startswith(('sim', 'pode', 'confirmo')):
+                if ',' in comando:
+                    diretriz = comando.split(',', 1)[1].strip()
+                self.iniciar_reparo(id, diretriz)
+            return
+        if self.reinicio_reparo and c in ('sim', 'pode', 'confirmo'):
+            self.reinicio_reparo = False
+            self.dizer("Reiniciando.", esperar=True)
+            emitir(evento='reiniciar', completo=False)
+            return
+        if c.rstrip('?!.') == 'o que deu errado':
+            self.emitir_bugs()
+            self.dizer('; '.join(b['resumo'] for b in registro.listar_bugs()[:3]) or 'Nenhum problema registrado.')
+            return
+        if c.startswith('anota uma melhoria:'):
+            diagnostico.registrar_bug('pedido', ValueError(comando.split(':', 1)[1].strip()), tipo='melhoria')
+            self.emitir_bugs()
+            self.dizer('Melhoria anotada.')
+            return
+        if c.startswith('corrige o problema'):
+            numero = re.search(r'\d+', c)
+            bugs = [b for b in registro.listar_bugs() if b['estado'] not in ('corrigido', 'ignorado')]
+            id = int(numero.group()) if numero else bugs[0]['id'] if bugs else None
+            if id is not None:
+                self.pedir_reparo(id)
+            return
+        self.reparo_pendente = None
+        self.reinicio_reparo = False
         if self.restauro_pendente:
             nome, self.restauro_pendente = self.restauro_pendente, None
             if re.match(r"(sim|pode|confirmo|restaura)\b", c):
@@ -513,6 +580,9 @@ class Assistente:
                 caminho = backup.fazer_backup("pedido")
                 self.dizer(f"Backup salvo em {caminho}.")
             except Exception as erro:
+                diagnostico.registrar_bug("motor", erro, erro.__traceback__,
+                                         {"motor": getattr(self, "motor", ""),
+                                          "pedido": getattr(_contexto, "trabalho", {}).get("comando", "")})
                 self.dizer(f"Não consegui fazer o backup: {erro}")
             return
         if re.fullmatch(r"(?:restaura|restaurar|recupera|recuperar)(?: o)?(?: ultimo)? backup", c):
@@ -578,7 +648,7 @@ class Assistente:
             prioridade, texto = fila.detectar_prioridade(comando)
             pedidos = fila.dividir_pedidos(texto)
             with self.trava:
-                ocupado = bool(self.trabalhos)
+                ocupado = bool(self.trabalhos) or self.reparando
                 if ARQ_MOTOR.exists():
                     salvo = ARQ_MOTOR.read_text(encoding='utf-8').strip()
                     if salvo in provedores.MOTORES:
@@ -591,6 +661,9 @@ class Assistente:
                        'Anotei, está na fila.' if ocupado else 'Certo.')
             self.acordar.set()
         except Exception as e:
+            diagnostico.registrar_bug("motor", e, e.__traceback__,
+                                     {"motor": getattr(self, "motor", ""),
+                                          "pedido": getattr(_contexto, "trabalho", {}).get("comando", "")})
             registrar('ERRO', f'Fila: {e}')
             emitir(evento='erro', texto=f'Não consegui anotar o pedido: {e}')
 
@@ -604,6 +677,7 @@ class Assistente:
             return None
         em_conversa = time.monotonic() < self.conversa_ate
         texto = transcrever(audio)
+        registro.evento("Transcrição", "ok" if texto else "")
         if not texto:
             return None
         achou = ATIVACAO.search(texto) or ativacao_tolerante(texto)
@@ -680,6 +754,16 @@ class Assistente:
             except json.JSONDecodeError:
                 continue
             tipo = cmd.get("cmd")
+            if tipo == "bugs":
+                self.emitir_bugs()
+                continue
+            if tipo in ("corrigir_bug", "ignorar_bug"):
+                if tipo == "ignorar_bug":
+                    registro.atualizar_bug(cmd['id'], estado='ignorado')
+                    self.emitir_bugs()
+                else:
+                    self.pedir_reparo(cmd['id'], cmd.get('diretriz', ''))
+                continue
             if tipo in ("vozes", "voz", "baixar_voz", "remover_voz", "amostra_voz"):
                 try:
                     id = cmd.get("valor")
@@ -695,6 +779,9 @@ class Assistente:
                         self.amostra_voz(id)
                     self.emitir_vozes()
                 except Exception as erro:
+                    diagnostico.registrar_bug("motor", erro, erro.__traceback__,
+                                             {"motor": getattr(self, "motor", ""),
+                                          "pedido": getattr(_contexto, "trabalho", {}).get("comando", "")})
                     emitir(evento="erro", texto=str(erro))
                 continue
             if tipo == "texto" and cmd.get("texto", "").strip():
@@ -706,6 +793,7 @@ class Assistente:
                 try:
                     provedores.salvar_chave(cmd.get("motor"), cmd.get("valor"))
                 except Exception:
+                    diagnostico.registrar_bug("motor", sys.exc_info()[1], sys.exc_info()[2])
                     emitir(evento="erro", texto="Não foi possível salvar a chave.")
                 else:
                     self.emitir_motores()
@@ -722,6 +810,9 @@ class Assistente:
                     salvo["modo_microfone"] = cmd["valor"]
                     caminho.write_text(json.dumps(salvo, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
                 except Exception as erro:
+                    diagnostico.registrar_bug("motor", erro, erro.__traceback__,
+                                             {"motor": getattr(self, "motor", ""),
+                                          "pedido": getattr(_contexto, "trabalho", {}).get("comando", "")})
                     emitir(evento="erro", texto=f"Não consegui salvar o modo do microfone: {erro}")
             elif tipo == "silencio":
                 self.silencio = bool(cmd.get("valor"))
@@ -762,7 +853,8 @@ class Assistente:
     def oferecer_restauro(self, motivo=""):
         try:
             ultimo = backup.ultimo_backup_integro()
-        except Exception:
+        except Exception as erro:
+            diagnostico.registrar_bug("backup", erro, erro.__traceback__)
             ultimo = None
         if not ultimo:
             self.dizer(f"{motivo} Não encontrei um backup íntegro para restaurar.".strip())
@@ -776,7 +868,7 @@ class Assistente:
 
     def restaurar(self, nome):
         with self.trava:
-            ocupado = bool(self.trabalhos)
+            ocupado = bool(self.trabalhos) or self.reparando
         if ocupado:
             self.dizer("Tem tarefa em andamento. Cancele ou espere terminar antes de restaurar.")
             return
@@ -784,12 +876,104 @@ class Assistente:
             # O próprio motor segura a trava motor_ativo; por isso restaura por dentro.
             resultado = backup.restaurar(nome, confirmado=True, pelo_motor=True)
         except Exception as erro:
+            diagnostico.registrar_bug("motor", erro, erro.__traceback__,
+                                     {"motor": getattr(self, "motor", ""),
+                                          "pedido": getattr(_contexto, "trabalho", {}).get("comando", "")})
             self.dizer(f"Não consegui restaurar: {erro}")
             return
         registrar("Sistema", f"backup {nome} restaurado; cópia de segurança: {resultado['seguranca']}")
         self.dizer("Backup restaurado. Vou me reiniciar.", esperar=True)
         emitir(evento="reiniciar", completo=False)
         self.sair()
+
+    def emitir_bugs(self):
+        emitir(evento='bugs', lista=registro.listar_bugs())
+
+    def pedir_reparo(self, id, diretriz=''):
+        bug = registro.detalhe_bug(id)
+        if bug is None:
+            return
+        self.reparo_pendente = (int(id), diretriz[:1000])
+        texto = f"Posso corrigir o problema {id}: {bug['resumo']}?"
+        self.mensagem('secretario', texto)
+        self.dizer(texto)
+
+    def iniciar_reparo(self, id, diretriz):
+        with self.trava:
+            if self.ocupado or self.reparando:
+                self.dizer('Aguarde as tarefas terminarem e peça o reparo novamente.')
+                return
+            self.reparando = True
+
+        def trabalhar_reparo():
+            try:
+                resultado = reparo.executar(id, diretriz, aprovado=True)
+                if resultado['ok']:
+                    emitir(evento='reparo', commit=resultado['commit'], id=id)
+                    self.reinicio_reparo = True
+                self.mensagem('secretario', resultado['texto'])
+                self.dizer(resultado['texto'])
+                self.emitir_bugs()
+            finally:
+                self.reparando = False
+                self.acordar.set()
+
+        threading.Thread(target=trabalhar_reparo, daemon=True).start()
+
+    def testar_microfone(self):
+        if self.apps_mic:
+            return 'adiado durante chamada'
+        if self.mic.stream is not None:
+            return True
+        import sounddevice
+        with sounddevice.InputStream(channels=1, device=self.config_mic.get('microfone')):
+            return True
+
+    def vigiar_saude(self):
+        ultima = registro.ultimo_evento('Saude completa')
+        ultimo_dia = ultima['ts'][:10] if ultima else ''
+        diagnostico.importar_quedas()
+        diagnostico.verificar_saude(microfone=self.testar_microfone)
+        while self.ativo:
+            try:
+                if not self.ocupado and not self.reparando and not self.apps_mic and not self.falando:
+                    hoje = datetime.now().date().isoformat()
+                    import segundo_plano
+                    if ultimo_dia != hoje and segundo_plano.ocioso_ha() >= 60:
+                        with self.trava:
+                            pode = not self.ocupado and not self.reparando
+                            if pode:
+                                self.reparando = True
+                        if pode:
+                            try:
+                                diagnostico.verificar_saude(completo=True,
+                                    microfone=self.testar_microfone)
+                                registro.evento('Saude completa', hoje)
+                                ultimo_dia = hoje
+                            finally:
+                                self.reparando = False
+                                self.acordar.set()
+                    diagnostico.detectar_sintomas()
+                    for arquivo in (BASE / 'sinais').glob('corrigir_*.json'):
+                        dados = json.loads(arquivo.read_text(encoding='utf-8'))
+                        self.pedir_reparo(dados['id'], dados.get('diretriz', ''))
+                        arquivo.unlink()
+                    for bug in registro.listar_bugs():
+                        if (bug['estado'] in ('novo', 'informado', 'falhou')
+                                and bug['avisado_em'] != hoje and not self.reparo_pendente
+                                and not self.restauro_pendente and not self.voz_pendente
+                                and not self.reinicio_reparo):
+                            texto = (f"Encontrei um problema: {bug['resumo']}. Quer que eu tente corrigir? "
+                                     'Se tiver alguma orientação, pode falar.')
+                            self.reparo_pendente = (bug['id'], '')
+                            self.mensagem('secretario', texto)
+                            self.dizer(texto)
+                            registro.atualizar_bug(bug['id'], estado='informado', avisado_em=hoje)
+                            break
+                    self.emitir_bugs()
+            except Exception as erro:
+                diagnostico.registrar_bug('vigia_saude', erro, erro.__traceback__)
+            time.sleep(30)
 
     def rodar(self):
         global JANELA_CONVERSA
@@ -809,7 +993,12 @@ class Assistente:
             try:
                 backup.backup_diario()
             except Exception as erro:
+                diagnostico.registrar_bug("motor", erro, erro.__traceback__,
+                                         {"motor": getattr(self, "motor", ""),
+                                          "pedido": getattr(_contexto, "trabalho", {}).get("comando", "")})
                 emitir(evento="erro", texto=f"Não consegui fazer o backup diário: {erro}")
+            diagnostico.instalar_hooks()
+            threading.Thread(target=self.vigiar_saude, daemon=True).start()
             fila.recuperar()
             self.emitir_fila()
             threading.Thread(target=self.despachar, daemon=True).start()
@@ -830,6 +1019,7 @@ class Assistente:
 
 
 if __name__ == "__main__":
+    diagnostico.instalar_hooks()
     if not IPC:
         print("Carregando reconhecimento de voz...", flush=True)
     emitir(evento="estado", estado="carregando")

@@ -341,5 +341,30 @@ def restaurar_backup(nome: str = "") -> str:
             "dizer ou digitar 'restaura o backup'; o motor mostra qual backup e pede confirmação.")
 
 
+
+@mcp.tool()
+def listar_bugs() -> list[dict]:
+    """Lista problemas e melhorias registrados pelo secretário."""
+    import registro
+    return registro.listar_bugs()
+
+
+@mcp.tool()
+def detalhe_bug(id: int) -> dict:
+    """Mostra o contexto e traceback de um problema."""
+    import registro
+    return registro.detalhe_bug(id) or {}
+
+
+@mcp.tool()
+def corrigir_bug(id: int, diretriz: str = '') -> str:
+    """Solicita ao motor a confirmação do Deivid para este bug; não aprova pelo agente."""
+    pasta = Path(__file__).resolve().parent / 'sinais'
+    pasta.mkdir(exist_ok=True)
+    (pasta / f'corrigir_{id}.json').write_text(
+        json.dumps({'id': id, 'diretriz': diretriz}, ensure_ascii=False), encoding='utf-8')
+    return 'O motor pedirá a aprovação explícita do Deivid para este problema.'
+
+
 if __name__ == "__main__":
     mcp.run()

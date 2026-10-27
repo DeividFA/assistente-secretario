@@ -65,3 +65,9 @@ final será lida em voz alta.
 Use `vozes_disponiveis`, `baixar_voz` e `usar_voz` para escolher vozes do catálogo.
 Piper funciona localmente após baixar; Edge usa internet e envia o texto à Microsoft.
 
+
+## Problemas e reparos
+Use listar_bugs e detalhe_bug para consultar problemas. corrigir_bug solicita confirmação
+pelo motor para o bug específico; nunca trate uma aprovação de outro problema como válida.
+O reparo só começa depois do sim explícito do Deivid e usa o Codex, backup e testes.
+Nunca faça push. Depois de corrigir, peça autorização para reiniciar.
