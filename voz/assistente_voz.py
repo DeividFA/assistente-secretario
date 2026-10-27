@@ -53,6 +53,7 @@ NOMES_FERRAMENTAS = {
     "WebSearch": "pesquisando na web",
     "WebFetch": "lendo página",
     "Skill": "carregando habilidade",
+    "ToolSearch": "preparando ferramentas",
 }
 
 if IPC:

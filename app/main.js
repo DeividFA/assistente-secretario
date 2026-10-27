@@ -35,11 +35,11 @@ function mostrar() {
 function criarJanela() {
   janela = new BrowserWindow({
     width: 1180, height: 760, minWidth: 820, minHeight: 520,
-    backgroundColor: '#313338',
+    backgroundColor: '#0f1012',
     title: 'Secretário',
     icon: path.join(ICONES, 'app.png'),
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#1e1f22', symbolColor: '#b5bac1', height: 30 },
+    titleBarOverlay: { color: '#0f1012', symbolColor: '#a9adb6', height: 32 },
     show: !process.argv.includes('--oculto'),
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
   });

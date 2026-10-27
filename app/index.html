@@ -7,60 +7,102 @@
   <link rel="stylesheet" href="estilo.css">
 </head>
 <body>
-  <div class="barra-titulo">Secretário</div>
+  <header class="barra-titulo">
+    <img src="icones/app.svg" alt="">
+    <span>Secretário</span>
+  </header>
+
   <div class="app">
-    <!-- trilho de servidores -->
+    <!-- trilho -->
     <nav class="trilho">
-      <div class="servidor ativo" title="Secretário"><img src="icones/app.png" alt=""></div>
+      <button class="trilho-item ativo" title="Conversas">
+        <img src="icones/app.svg" alt="">
+      </button>
       <div class="separador"></div>
-      <button class="servidor acao" id="btn-obsidian" title="Abrir memória no Obsidian">
-        <svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6z M15 3v4h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M9 12h7M9 16h7" stroke="currentColor" stroke-width="2"/></svg>
+      <button class="trilho-item acao" id="btn-obsidian" title="Abrir memória no Obsidian">
+        <svg viewBox="0 0 24 24"><path d="M12 3.5c-2.6 0-4.5 1.9-4.5 4.3 0 .5-.4.9-.9 1A3.3 3.3 0 0 0 4 12.1c0 1.2.6 2.2 1.6 2.8.3.2.5.6.4 1-.1.3-.1.6-.1.9a3.6 3.6 0 0 0 6.1 2.6m0-15.9c2.6 0 4.5 1.9 4.5 4.3 0 .5.4.9.9 1a3.3 3.3 0 0 1 2.6 3.3c0 1.2-.6 2.2-1.6 2.8-.3.2-.5.6-.4 1 .1.3.1.6.1.9a3.6 3.6 0 0 1-6.1 2.6m0-15.9v15.9"/></svg>
       </button>
     </nav>
 
-    <!-- lista de conversas -->
+    <!-- lateral -->
     <aside class="lateral">
-      <header class="lateral-topo">Secretário</header>
-      <div class="secao">
-        <span>CONVERSAS</span>
-        <button id="btn-nova" title="Nova conversa">+</button>
+      <div class="lateral-topo">
+        <h2>Conversas</h2>
+        <button class="botao-icone" id="btn-nova" title="Nova conversa">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
       </div>
       <ul id="conversas"></ul>
 
-      <!-- painel do usuário (igual ao Discord) -->
+      <!-- cartão de voz (como o painel "Voz conectada" do Discord) -->
+      <section class="cartao-voz" id="cartao-voz">
+        <div class="voz-linha">
+          <span class="ponto" id="ponto"></span>
+          <div class="voz-texto">
+            <strong id="estado-rotulo">Carregando</strong>
+            <small id="estado-detalhe">preparando o reconhecimento de voz</small>
+          </div>
+          <div class="ondas" id="ondas"><i></i><i></i><i></i><i></i><i></i></div>
+        </div>
+        <div class="voz-botoes">
+          <button class="voz-botao" id="btn-mudo" title="Mutar microfone">
+            <svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3"/><path class="risco" d="M4 4l16 16"/></svg>
+            <span>Microfone</span>
+          </button>
+          <button class="voz-botao" id="btn-silencio" title="Silenciar a voz do secretário">
+            <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4zM15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/><path class="risco" d="M4 4l16 16"/></svg>
+            <span>Voz</span>
+          </button>
+        </div>
+      </section>
+
       <footer class="usuario">
-        <div class="avatar eu">D<span class="bolinha" id="bolinha"></span></div>
+        <div class="avatar eu">D</div>
         <div class="usuario-info">
           <strong>Deivid</strong>
-          <div class="nivel-microfone" title="Nível do microfone"><span id="nivel-microfone"></span></div>
-          <small id="estado-texto">carregando…</small>
+          <small>Ctrl+Shift+Espaço para falar</small>
         </div>
-        <button class="icone" id="btn-mudo" title="Mutar microfone">
-          <svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z M5 11a7 7 0 0 0 14 0 M12 18v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path class="risco" d="M4 4l16 16" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
-        </button>
-        <button class="icone" id="btn-silencio" title="Silenciar a voz do secretário">
-          <svg viewBox="0 0 24 24"><path d="M4 14v-2a8 8 0 0 1 16 0v2 M4 14h3v6H4z M17 14h3v6h-3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path class="risco" d="M4 4l16 16" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
-        </button>
       </footer>
     </aside>
 
     <!-- chat -->
     <main class="chat">
       <header class="chat-topo">
-        <span class="hash">#</span><span id="titulo-conversa">geral</span>
-        <span class="chip" id="chip-estado">carregando</span>
+        <h1 id="titulo-conversa">Nova conversa</h1>
+        <span class="pilula" id="pilula"><span class="ponto"></span><span id="pilula-texto">carregando</span></span>
       </header>
-      <section id="mensagens"></section>
-      <div class="digitando" id="digitando" hidden>
-        <span class="pontos"><i></i><i></i><i></i></span>
-        <span id="digitando-texto">Secretário está trabalhando…</span>
-        <button id="btn-cancelar">Cancelar</button>
-      </div>
-      <form class="entrada" id="form">
-        <button type="button" class="icone" id="btn-falar" title="Falar agora (Ctrl+Shift+Espaço)">
-          <svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z M5 11a7 7 0 0 0 14 0 M12 18v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        </button>
-        <textarea id="texto" rows="1" placeholder="Conversar com o secretário  ·  ou diga “Secretário, …”"></textarea>
+
+      <section class="rolagem" id="rolagem">
+        <div class="coluna">
+          <div class="vazio" id="vazio">
+            <div class="orbe"><img src="icones/app.svg" alt=""></div>
+            <h2 id="saudacao">Olá, Deivid</h2>
+            <p>Diga <b>“Secretário, …”</b> a qualquer momento, aperte <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Espaço</kbd> ou digite abaixo.</p>
+            <div class="sugestoes" id="sugestoes"></div>
+          </div>
+          <div id="mensagens"></div>
+          <div class="trabalhando" id="trabalhando" hidden>
+            <div class="avatar sec"><img src="icones/app.svg" alt=""></div>
+            <div class="trabalhando-corpo">
+              <div class="brilho">Trabalhando<span class="pontos"><i></i><i></i><i></i></span></div>
+              <small id="trabalhando-passo">entendendo o pedido</small>
+            </div>
+            <button class="botao-fantasma" id="btn-cancelar">Cancelar</button>
+          </div>
+        </div>
+      </section>
+
+      <form class="compositor" id="form">
+        <div class="caixa">
+          <button type="button" class="botao-icone" id="btn-falar" title="Falar agora (Ctrl+Shift+Espaço)">
+            <svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+          </button>
+          <textarea id="texto" rows="1" placeholder="Peça algo ao secretário…"></textarea>
+          <button type="submit" class="enviar" id="btn-enviar" title="Enviar (Enter)" disabled>
+            <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </button>
+        </div>
+        <p class="dica"><kbd>Enter</kbd> envia · <kbd>Shift</kbd>+<kbd>Enter</kbd> nova linha · fechar a janela mantém o secretário na bandeja</p>
       </form>
     </main>
   </div>
