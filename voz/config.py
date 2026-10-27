@@ -8,6 +8,7 @@ PADROES = {
     "microfone": None,
     "modelo_whisper": "small",
     "velocidade_fala": 190,
+    "voz": "windows",
     "janela_conversa": 15,
     "palavra_ativacao": "secretário",
     "pausa_fala": 1.4,

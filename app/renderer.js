@@ -279,8 +279,72 @@ $('seletor-motor').onchange = (e) => {
   e.target.value = motorAtual;
 };
 
+let vozesAtuais = { lista: [], atual: 'windows' };
+const downloadsVoz = new Map();
+function mostrarVozes(lista, atual) {
+  vozesAtuais = { lista, atual };
+  const painel = $('lista-vozes');
+  painel.replaceChildren();
+  for (const voz of lista) {
+    const linha = document.createElement('section');
+    linha.className = 'voz-item';
+    const nome = document.createElement('strong');
+    nome.textContent = `${voz.nome}${voz.id === atual ? ' · atual' : ''}`;
+    const detalhe = document.createElement('small');
+    detalhe.textContent = `${voz.online ? 'Online · usa internet; o texto é enviado à Microsoft' : 'Local'} · ${voz.idioma} · ${voz.tamanho ? `~${voz.tamanho} MB` : 'sem download'} · ${voz.instalada ? 'disponível' : 'não baixada'}`;
+    linha.append(nome, detalhe);
+    const acoes = document.createElement('div');
+    acoes.className = 'voz-acoes';
+    const baixando = downloadsVoz.has(voz.id);
+    for (const [rotulo, cmd, habilitado] of [
+      ['Baixar', 'baixar_voz', voz.tipo === 'piper' && !voz.instalada],
+      ['Ouvir', 'amostra_voz', voz.instalada],
+      ['Usar', 'voz', voz.instalada && voz.id !== atual],
+      ['Remover', 'remover_voz', voz.tipo === 'piper' && voz.instalada],
+    ]) {
+      const botao = document.createElement('button');
+      botao.className = 'botao-fantasma';
+      botao.textContent = rotulo;
+      botao.disabled = !habilitado || baixando;
+      botao.onclick = () => {
+        if (cmd === 'baixar_voz') {
+          downloadsVoz.set(voz.id, 0);
+          mostrarVozes(vozesAtuais.lista, vozesAtuais.atual);
+        }
+        window.secretario.enviar({ cmd, valor: voz.id });
+      };
+      acoes.appendChild(botao);
+    }
+    linha.appendChild(acoes);
+    if (baixando) {
+      const barra = document.createElement('progress');
+      barra.max = 100;
+      const percentual = downloadsVoz.get(voz.id);
+      if (percentual !== null) barra.value = percentual;
+      barra.setAttribute('aria-label', `Download de ${voz.nome}`);
+      linha.appendChild(barra);
+    }
+    painel.appendChild(linha);
+  }
+}
+$('btn-vozes').onclick = () => {
+  $('painel-vozes').showModal();
+  window.secretario.enviar({ cmd: 'vozes' });
+};
+$('fechar-vozes').onclick = () => $('painel-vozes').close();
+
 window.secretario.aoEvento((ev) => {
   switch (ev.evento) {
+    case 'vozes':
+      for (const voz of ev.lista) {
+        if (voz.instalada) downloadsVoz.delete(voz.id);
+      }
+      mostrarVozes(ev.lista, ev.atual);
+      break;
+    case 'download_voz':
+      downloadsVoz.set(ev.id, ev.total ? Math.min(100, ev.feito / ev.total * 100) : null);
+      mostrarVozes(vozesAtuais.lista, vozesAtuais.atual);
+      break;
     case 'motores': mostrarMotores(ev.lista, ev.atual); break;
     case 'fila': mostrarFila(ev.tarefas); break;
     case 'estado': mostrarEstado(ev.estado); break;
@@ -296,7 +360,13 @@ window.secretario.aoEvento((ev) => {
       break;
     case 'sessao': atual().sessao = ev.id; salvar(); break;
     case 'nova_conversa': criarConversa(); break;
-    case 'erro': adicionar({ autor: 'erro', texto: ev.texto }); break;
+    case 'erro':
+      if (ev.id) {
+        downloadsVoz.delete(ev.id);
+        mostrarVozes(vozesAtuais.lista, vozesAtuais.atual);
+      }
+      adicionar({ autor: 'erro', texto: ev.texto });
+      break;
   }
 });
 
@@ -339,7 +409,8 @@ $('btn-obsidian').onclick = () => window.secretario.enviar({ cmd: 'obsidian' });
 
 desenharConversas();
 desenharMensagens();
-window.secretario.estado().then(({ estado, mudo, motores }) => {
+window.secretario.estado().then(({ estado, mudo, motores, vozes }) => {
+  if (!vozesAtuais.lista.length && vozes) mostrarVozes(vozes.lista, vozes.atual);
   if (motorAtual === null && motores) mostrarMotores(motores.lista, motores.atual);
   mostrarEstado(estado);
   $('btn-mudo').classList.toggle('desligado', mudo);

@@ -36,9 +36,12 @@ import registro
 import agente_local
 import motores_cli
 import provedores
+import config
+import vozes
 from vocabulario import ativacao_tolerante
 
 from comum import BASE, Microfone, bip, falar, normalizar, texto_para_fala, transcrever
+from comum import aquecer_voz, interromper_fala
 
 IPC = "--ipc" in sys.argv
 ATIVACAO = re.compile(r"\bsecret[aá]ri[oa]\b[\s,.!?:;-]*", re.I)
@@ -130,6 +133,8 @@ class Assistente:
         self.pendentes_api = {}
         self.banco_falho = False
         self.restauro_pendente = None  # nome do backup aguardando o "sim"
+        self.voz_pendente = None
+        self.downloads_voz = set()
 
     @property
     def ocupado(self):
@@ -193,9 +198,9 @@ class Assistente:
         while self.ativo:
             texto, tarefa, pronto = self.falas.get()
             try:
-                if tarefa is None or not tarefa['cancelado']:
-                    self._dizer(texto)
-                    if tarefa is not None:
+                if tarefa is None or not tarefa.get('cancelado', False):
+                    self._dizer(texto, tarefa.get('voz_amostra') if tarefa else None)
+                    if tarefa is not None and 'voz_amostra' not in tarefa:
                         self.conversa_ate = time.monotonic() + JANELA_CONVERSA
             except Exception as e:
                 registrar('ERRO', f'Fala: {e}')
@@ -225,7 +230,7 @@ class Assistente:
         registrar({"voce": "Você", "secretario": "Secretário"}.get(autor, autor), texto)
         emitir(evento="mensagem", autor=autor, texto=texto)
 
-    def _dizer(self, texto):
+    def _dizer(self, texto, voz=None):
         """Fala com o microfone mudo, para não ouvir a própria voz."""
         if self.silencio:
             return
@@ -233,16 +238,60 @@ class Assistente:
         self.estado("falando")
         self.mic.mudo = True
         try:
-            falar(texto_para_fala(texto))
+            falar(texto_para_fala(texto), voz=voz)
         finally:
             time.sleep(0.2)
             self.mic.limpar()
             self.mic.mudo = False
             self.falando = False
+            if self.voz_pendente:
+                self.conversa_ate = time.monotonic() + JANELA_CONVERSA
             self.estado_ocioso()
 
     def emitir_motores(self):
         emitir(evento="motores", lista=provedores.listar(), atual=self.motor)
+
+    def emitir_vozes(self):
+        emitir(evento="vozes", lista=vozes.listar(), atual=config.carregar().get("voz", "windows"))
+        aquecer_voz()  # chamado depois de cada troca de voz; só carrega se for Piper
+
+    def baixar_voz(self, id, ativar=False):
+        with self.trava:
+            if id in self.downloads_voz:
+                return
+            self.downloads_voz.add(id)
+
+        def baixar():
+            ultimo = -5
+
+            def progresso(feito, total):
+                nonlocal ultimo
+                percentual = min(95, int(feito * 100 / total)) if total else 0
+                if percentual >= ultimo + 5:
+                    ultimo = percentual
+                    emitir(evento="download_voz", id=id, feito=feito, total=total)
+
+            try:
+                vozes.baixar(id, progresso)
+                if ativar:
+                    vozes.usar(id)
+                emitir(evento="download_voz", id=id, feito=1, total=1)
+            except Exception as erro:
+                emitir(evento="erro", id=id, texto=f"Não consegui baixar a voz: {erro}")
+            finally:
+                with self.trava:
+                    self.downloads_voz.discard(id)
+                self.emitir_vozes()
+
+        threading.Thread(target=baixar, daemon=True).start()
+
+    def amostra_voz(self, id):
+        vozes.obter(id)
+        with self.trava:
+            if self.silencio:
+                return
+        # Usa a mesma fila e proteção do microfone das respostas.
+        self.falas.put(("Olá, Deivid. Esta é a minha nova voz.", {"voz_amostra": id}, threading.Event()))
 
     def trocar_motor(self, motor):
         if motor not in provedores.MOTORES:
@@ -415,6 +464,7 @@ class Assistente:
                        resposta if resposta is not None else erro.strip()[-2000:], ferramentas)
 
     def cancelar(self, id=None, tudo=False):
+        interromper_fala()
         with self.trava:
             ids = ([t['id'] for t in fila.listar()] if tudo else
                    [id] if id is not None else list(self.trabalhos)[-1:])
@@ -458,6 +508,26 @@ class Assistente:
             return
         if self.banco_falho:
             self.dizer("O banco de dados está com falha. Diga: restaura o backup.")
+            return
+        if self.voz_pendente:
+            id, self.voz_pendente = self.voz_pendente, None
+            if re.fullmatch(r"(?:sim|pode|pode baixar|baixa|confirmo)", c):
+                self.baixar_voz(id, ativar=True)
+                return
+        troca_voz = vozes.TROCA_VOZ.fullmatch(c)
+        if troca_voz:
+            id = vozes.pelo_nome(troca_voz.group(1))
+            if id is None:
+                self.dizer("Não conheço essa voz.")
+            elif not next(v for v in vozes.listar() if v['id'] == id)['instalada']:
+                self.voz_pendente = id
+                self.mensagem("secretario", "Essa voz ainda não foi baixada, quer que eu baixe?")
+                self.dizer("Essa voz ainda não foi baixada, quer que eu baixe?")
+                self.conversa_ate = time.monotonic() + JANELA_CONVERSA
+            else:
+                vozes.usar(id)
+                self.emitir_vozes()
+                self.dizer("Voz alterada.")
             return
         troca = TROCA_MOTOR.search(c)
         if troca and len(c.split()) <= 6:  # frase curta: é comando, não tarefa
@@ -540,6 +610,23 @@ class Assistente:
             except json.JSONDecodeError:
                 continue
             tipo = cmd.get("cmd")
+            if tipo in ("vozes", "voz", "baixar_voz", "remover_voz", "amostra_voz"):
+                try:
+                    id = cmd.get("valor")
+                    if tipo == "voz":
+                        vozes.usar(id)
+                    elif tipo == "baixar_voz":
+                        self.baixar_voz(id)
+                        continue
+                    elif tipo == "remover_voz":
+                        interromper_fala()
+                        vozes.remover(id)
+                    elif tipo == "amostra_voz":
+                        self.amostra_voz(id)
+                    self.emitir_vozes()
+                except Exception as erro:
+                    emitir(evento="erro", texto=str(erro))
+                continue
             if tipo == "texto" and cmd.get("texto", "").strip():
                 registrar("Você (texto)", cmd["texto"])
                 self.executar(cmd["texto"].strip())
@@ -560,6 +647,8 @@ class Assistente:
                 self.estado_ocioso()
             elif tipo == "silencio":
                 self.silencio = bool(cmd.get("valor"))
+                if self.silencio:
+                    interromper_fala()
             elif tipo == "sessao":
                 self.sessao = cmd.get("id")
             elif tipo == "ouvir_agora":
@@ -577,6 +666,7 @@ class Assistente:
 
     def sair(self):
         self.ativo = False
+        interromper_fala()
         with self.trava:
             for trabalho in self.trabalhos.values():
                 trabalho['cancelado'] = True
@@ -639,7 +729,9 @@ class Assistente:
             self.emitir_fila()
             threading.Thread(target=self.despachar, daemon=True).start()
         self.emitir_motores()
+        aquecer_voz()
         if IPC:
+            self.emitir_vozes()
             threading.Thread(target=self.ler_app, daemon=True).start()
             threading.Thread(target=self.emitir_nivel, daemon=True).start()
         registrar("Sistema", f"ouvindo (limiar de voz {self.mic.limiar:.3f}). Diga 'secretário' + comando.")

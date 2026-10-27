@@ -51,8 +51,9 @@
           </button>
           <button class="voz-botao" id="btn-silencio" title="Silenciar a voz do secretário">
             <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4zM15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/><path class="risco" d="M4 4l16 16"/></svg>
-            <span>Voz</span>
+            <span>Silenciar</span>
           </button>
+          <button class="voz-botao" id="btn-vozes" title="Escolher voz de resposta"><span>Voz</span></button>
         </div>
       </section>
 
@@ -112,6 +113,11 @@
       </form>
     </main>
   </div>
+  <dialog id="painel-vozes" aria-labelledby="titulo-vozes">
+    <div class="vozes-topo"><h2 id="titulo-vozes">Voz de resposta</h2><button id="fechar-vozes" class="botao-fantasma">Fechar</button></div>
+    <p>Vozes Edge: usa internet; o texto é enviado à Microsoft.</p>
+    <div id="lista-vozes"></div>
+  </dialog>
   <script src="renderer.js"></script>
 </body>
 </html>

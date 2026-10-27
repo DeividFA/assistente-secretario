@@ -50,3 +50,7 @@ final será lida em voz alta.
   conteúdo são as dele: peça que ele dite e você só transcreve e preenche. Os dados
   cadastrais (nome, documentos, endereço) você preenche normalmente.
 - CAPTCHA, login e códigos de verificação continuam sendo feitos por ele.
+## Voz de resposta
+Use `vozes_disponiveis`, `baixar_voz` e `usar_voz` para escolher vozes do catálogo.
+Piper funciona localmente após baixar; Edge usa internet e envia o texto à Microsoft.
+

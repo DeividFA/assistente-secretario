@@ -2,11 +2,14 @@
 microfone com detecção de fala, transcrição e fala (voz do Windows)."""
 
 import io
+import atexit
+import json
 import os
 import queue
 import re
 import subprocess
 import sys
+import threading
 import time
 import unicodedata
 import wave
@@ -167,33 +170,100 @@ def transcrever(audio):
     return vocabulario.corrigir(texto)
 
 
-_FALA = r"""
-import sys, pyttsx3
-texto = sys.stdin.read()
-e = pyttsx3.init()
-for v in e.getProperty("voices"):
-    if "Portug" in v.name or "pt" in str(v.languages).lower():
-        e.setProperty("voice", v.id)
-        break
-e.setProperty("rate", int(sys.argv[1]))
-e.say(texto)
-e.runAndWait()
-"""
+_processo_fala = None
+_trava_fala = threading.Lock()
 
 
-def falar(texto, esperar=True):
-    """Fala o texto com a voz pt-BR do Windows. Roda em outro processo para poder ser
-    interrompida (proc.kill())."""
-    env = dict(os.environ, PYTHONIOENCODING="utf-8")
-    velocidade = str(os.environ.get(
-        "SECRETARIO_VELOCIDADE_FALA", config.carregar()["velocidade_fala"]))
-    proc = subprocess.Popen([sys.executable, "-c", _FALA, velocidade], stdin=subprocess.PIPE,
-                            env=env, creationflags=subprocess.CREATE_NO_WINDOW)
-    proc.stdin.write(texto.encode("utf-8"))
-    proc.stdin.close()
+class Fala:
+    """Representa uma fala, sem confundir seu fim com o fim do processo."""
+
+    def __init__(self, proc):
+        self.proc = proc
+        self.pronto = threading.Event()
+        self.codigo = None
+
+    def kill(self):
+        if not self.pronto.is_set() and self.proc.poll() is None:
+            self.proc.kill()
+
+    def poll(self):
+        if self.pronto.is_set():
+            return self.codigo
+        return self.proc.poll()
+
+    def wait(self, timeout=None):
+        if not self.pronto.wait(timeout):
+            raise subprocess.TimeoutExpired("fala", timeout)
+        return self.poll()
+
+
+def interromper_fala():
+    if _processo_fala is not None and _processo_fala.poll() is None:
+        _processo_fala.kill()
+
+
+atexit.register(interromper_fala)
+
+
+def aquecer_voz():
+    """Carrega o modelo Piper escolhido antes da primeira fala (~6 s a menos nela)."""
+    voz = config.carregar().get("voz", "windows")
+    if voz.startswith("piper:"):
+        falar("", esperar=False, voz=voz, aquecer=True)
+
+
+def falar(texto, esperar=True, voz=None, aquecer=False):
+    """Reutiliza o processo; o retorno ainda permite kill, wait e poll."""
+    global _processo_fala
+    # A trava fica com o leitor até o fim, inclusive em chamadas sem espera.
+    _trava_fala.acquire()
+    try:
+        if _processo_fala is None or _processo_fala.poll() is not None:
+            if _processo_fala is not None:
+                _processo_fala.stdin.close()
+                _processo_fala.stdout.close()
+            _processo_fala = subprocess.Popen(
+                [sys.executable, str(BASE / "falar_proc.py")], stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, text=True, encoding="utf-8",
+                env=dict(os.environ, PYTHONIOENCODING="utf-8"),
+                creationflags=subprocess.CREATE_NO_WINDOW)
+        proc = _processo_fala
+        configuracao = config.carregar()
+        pedido = {"texto": texto, "voz": voz or configuracao.get("voz", "windows"),
+                  "velocidade": os.environ.get("SECRETARIO_VELOCIDADE_FALA",
+                                               configuracao["velocidade_fala"])}
+        if aquecer:
+            pedido = {"carregar": pedido["voz"]}
+        retorno = Fala(proc)
+        proc.stdin.write(json.dumps(pedido, ensure_ascii=False) + "\n")
+        proc.stdin.flush()
+    except Exception:
+        interromper_fala()
+        _trava_fala.release()
+        raise
+
+    def aguardar():
+        try:
+            for linha in proc.stdout:
+                try:
+                    terminou = json.loads(linha).get("fim")
+                except (ValueError, AttributeError):
+                    continue
+                if terminou:
+                    break
+            else:
+                proc.wait()
+                proc.stdin.close()
+                proc.stdout.close()
+        finally:
+            retorno.codigo = proc.poll() if proc.poll() is not None else 0
+            retorno.pronto.set()
+            _trava_fala.release()
+
+    threading.Thread(target=aguardar, daemon=True).start()
     if esperar:
-        proc.wait()
-    return proc
+        retorno.wait()
+    return retorno
 
 
 def texto_para_fala(texto, limite=700):

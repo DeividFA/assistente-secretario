@@ -26,6 +26,7 @@ from comum import CAPTURAS, Microfone, bip, falar as _falar, transcrever
 import delegacao
 import provedores
 import backup
+import vozes
 
 pyautogui.FAILSAFE = True  # mouse no canto superior esquerdo aborta qualquer ação
 pyautogui.PAUSE = 0.15
@@ -37,6 +38,26 @@ LEMBRETES = Path(__file__).resolve().parent / "lembretes.json"
 
 def _arquivo(prefixo):
     return CAPTURAS / f"{prefixo}_{datetime.now():%Y%m%d_%H%M%S}.jpg"
+
+
+@mcp.tool()
+def vozes_disponiveis() -> list[dict]:
+    """Lista vozes locais e online; Edge envia o texto à Microsoft."""
+    return vozes.listar()
+
+
+@mcp.tool()
+def baixar_voz(id: str) -> str:
+    """Baixa uma voz Piper do catálogo."""
+    vozes.baixar(id)
+    return "Voz baixada."
+
+
+@mcp.tool()
+def usar_voz(id: str) -> str:
+    """Escolhe a voz; Edge usa internet e envia o texto à Microsoft."""
+    vozes.usar(id)
+    return "Voz alterada."
 
 
 @mcp.tool()

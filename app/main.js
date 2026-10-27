@@ -34,6 +34,7 @@ let saindo = false;
 let estadoAtual = 'carregando';
 let mudo = false;
 let motores = { lista: [], atual: null };
+let vozes = { lista: [], atual: 'windows' };
 
 function reiniciarSecretario(completo) {
   if (saindo) return;
@@ -164,6 +165,7 @@ function iniciarMotor() {
     let ev;
     try { ev = JSON.parse(linha); } catch { return; }
     if (ev.evento === 'motores') { motores = { lista: ev.lista, atual: ev.atual }; atualizarBandeja(); }
+    if (ev.evento === 'vozes') vozes = { lista: ev.lista, atual: ev.atual };
     if (ev.evento === 'reiniciar') reiniciarSecretario(ev.completo === true);
     if (ev.evento === 'estado') { estadoAtual = ev.estado; atualizarBandeja(); }
     if (ev.evento === 'mensagem' && ev.autor === 'secretario' && janela && !janela.isVisible()) {
@@ -196,7 +198,7 @@ ipcMain.on('cmd', (_e, cmd) => {
   if (cmd.cmd === 'obsidian') return abrirObsidian();
   enviarAoMotor(cmd);
 });
-ipcMain.handle('estado', () => ({ estado: estadoAtual, mudo, motores }));
+ipcMain.handle('estado', () => ({ estado: estadoAtual, mudo, motores, vozes }));
 
 app.whenReady().then(() => {
   app.setAppUserModelId('Secretario.Deivid');
