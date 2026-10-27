@@ -290,3 +290,66 @@ Cofre: `Path.home() / "Documents" / "Secretario"` (sempre aceitar `cofre=` como 
   "sim", "pode", "confirmo" executa `agente_local.confirmar`; qualquer outro descarta a
   pendência. Atualizar `PROMPT_LOCAL` (agora ele pode usar o computador).
 - Verificação: `py_compile`; testes existentes passam.
+
+## T18 — Fila de tarefas com prioridade (multitarefa)
+- Arquivos: criar `voz/fila.py` e `voz/tests/test_fila.py`.
+- Fazer (só biblioteca padrão; mesmo banco SQLite da T10, `voz/secretario.db`, aceitar `banco=`):
+  - Tabela `fila(id INTEGER PK, criado TEXT, comando TEXT, prioridade INTEGER, status TEXT,
+    motor TEXT, inicio TEXT, fim TEXT, resposta TEXT)`. Status: `pendente`, `rodando`,
+    `concluida`, `erro`, `cancelada`. Prioridade: 0 = urgente, 1 = alta, 2 = normal, 3 = baixa.
+  - `detectar_prioridade(texto) -> (prioridade, texto_limpo)`: palavras-gatilho (comparar com
+    `comum.normalizar`): urgente/urgencia/agora/imediatamente → 0; primeiro/antes/rapido → 1;
+    depois/quando puder/mais tarde/sem pressa → 3; senão 2. Remove do texto só o gatilho
+    no começo da frase (ex.: "urgente, abre o e-mail" → "abre o e-mail").
+  - `dividir_pedidos(texto, chamar=None) -> list[str]`: só tenta dividir se o texto normalizado
+    contém um conector: " e tambem ", " e depois ", " alem disso ", " outra coisa ",
+    " e em seguida ". Usa `chamar(mensagens) -> str` (padrão: Ollama `gemma3:4b`, `format: json`,
+    como em `extrator.py`) pedindo `{"pedidos": ["...", "..."]}`; no máximo 4; se falhar ou vier
+    vazio, devolve `[texto]`. Pedidos ligados entre si ("abre o e-mail e depois responde o
+    primeiro") devem continuar como UM pedido — dizer isso no prompt com esse exemplo.
+  - `adicionar(comando, prioridade=2, motor="claude") -> id`; `proxima() -> dict|None` (marca
+    como `rodando` a pendente de menor prioridade e mais antiga, de forma atômica:
+    `BEGIN IMMEDIATE`); `concluir(id, status, resposta="")`; `cancelar(id) -> bool` (só
+    pendente ou rodando); `listar(ativas=True) -> list[dict]` (pendentes e rodando, ordenadas
+    por prioridade e criação); `recuperar()` — na inicialização, tarefas que ficaram `rodando`
+    (motor caiu) voltam para `pendente`.
+- Testes: prioridade e limpeza do texto; ordem de `proxima` (urgente passa na frente, empate
+  pela mais antiga); `cancelar`; `recuperar`; `dividir_pedidos` com `chamar` falso (dividido,
+  não dividido, JSON inválido → `[texto]`) e sem conector não chama o modelo.
+
+## T19 — Motor multitarefa (executor da fila)
+- Depende de: T10, T14, T15, T18. Arquivos: `voz/assistente_voz.py`.
+- Fazer:
+  - Pedido novo (voz ou texto) que não é comando de controle: `detectar_prioridade` →
+    `dividir_pedidos` → `fila.adicionar` para cada parte. Fala curta: 1 tarefa → "Certo." se
+    nada estiver rodando, senão "Anotei, está na fila." / com prioridade 0 → "Urgente, vou
+    fazer agora."; várias → "Anotei N tarefas.". Emite `{"evento":"fila","tarefas":fila.listar()}`
+    sempre que a fila muda.
+  - Executor: uma thread despachante que, enquanto houver vaga, pega `fila.proxima()` e roda
+    numa thread de trabalho. Vagas: 2 com motor Claude, 1 com Gemma. Remove o bloqueio atual
+    "Ainda estou na tarefa anterior".
+  - Sessões Claude: a primeira tarefa simultânea usa a sessão da conversa (`--resume`); se outra
+    já estiver rodando, a nova usa `--resume <sessao> --fork-session` (ou sessão nova se ainda
+    não houver nenhuma) e NÃO substitui `self.sessao` com o id derivado.
+  - Estado por tarefa: guardar `{id: {"proc", "cancelado"}}` em vez de `self.proc`/`self.cancelado`
+    únicos. "secretário, cancela" sem número cancela a mais recente rodando; `{"cmd":"cancelar",
+    "id": N}` cancela uma específica; "cancela tudo" cancela todas (rodando e pendentes).
+  - Toda mensagem/ferramenta emitida passa a levar `"tarefa": id`. Respostas faladas entram
+    numa fila de fala (uma por vez), prefixadas com o resumo do pedido quando houver mais de
+    uma tarefa rodando ("Sobre o e-mail: ...").
+  - Ao iniciar: `fila.recuperar()` e retomar pendentes.
+- Verificação: `py_compile`; testes existentes passam.
+
+## T20 — Painel da fila na interface
+- Depende de: T19. Arquivos: `app/renderer.js`, `app/index.html`, `app/estilo.css`, `app/preload.js` se precisar.
+- Fazer: acima do compositor, uma faixa recolhível "Fila (N)" que lista as tarefas ativas do
+  evento `fila`: ícone de estado (rodando = animado, pendente = relógio), etiqueta de prioridade
+  (Urgente vermelho, Alta âmbar, Normal cinza, Baixa azul), texto do pedido cortado em uma
+  linha e botão ✕ que envia `{cmd:"cancelar", id}`. Some quando a fila está vazia. O bloco
+  "Trabalhando…" passa a mostrar quantas tarefas estão rodando. Passos/mensagens com `tarefa`
+  continuam no chat normal.
+- Verificação: `node --check app/renderer.js`.
+
+## Ordem de execução da Fase 2
+Paralelo: T8, T10, T11 → depois T9, T13, T18 (paralelo) → T12 → T14 → T15 → T19 → T20 → T16 → T17.
+(Tarefas que alteram `voz/assistente_voz.py` rodam uma de cada vez.)
