@@ -31,6 +31,7 @@ from datetime import datetime
 from pathlib import Path
 
 import fila
+from vocabulario import ativacao_tolerante
 
 from comum import BASE, Microfone, bip, falar, normalizar, texto_para_fala, transcrever
 
@@ -438,7 +439,7 @@ class Assistente:
         texto = transcrever(audio)
         if not texto:
             return None
-        achou = ATIVACAO.search(texto)
+        achou = ATIVACAO.search(texto) or ativacao_tolerante(texto)
         if not achou and not em_conversa:
             return None  # não foi comigo: ignora
         comando = texto[achou.end():].strip() if achou else texto

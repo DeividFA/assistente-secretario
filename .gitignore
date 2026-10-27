@@ -9,3 +9,4 @@ voz/motor.txt
 voz/sinais/
 voz/secretario.db*
 __pycache__/
+voz/correcoes.json

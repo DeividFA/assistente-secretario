@@ -15,6 +15,7 @@ import numpy as np
 import sounddevice as sd
 
 import config
+import vocabulario
 
 BASE = Path(__file__).resolve().parent
 CAPTURAS = BASE.parent / "capturas"
@@ -117,23 +118,31 @@ class Microfone:
 
 
 _modelo = None
+_termos = None
+_termos_ate = 0
 
 
 def transcrever(audio):
     """Transcreve áudio 16 kHz mono (float32) em português, localmente."""
-    global _modelo
+    global _modelo, _termos, _termos_ate
     if _modelo is None:
         from faster_whisper import WhisperModel
         nome = os.environ.get("SECRETARIO_WHISPER", config.carregar()["modelo_whisper"])
         _modelo = WhisperModel(nome, device="cpu", compute_type="int8")
+    agora = time.monotonic()
+    if _termos is None or agora >= _termos_ate:
+        _termos = vocabulario.termos()
+        _termos_ate = agora + 300
     segmentos, _ = _modelo.transcribe(
         audio, language="pt", beam_size=1, condition_on_previous_text=False,
-        initial_prompt="Secretário, abre o navegador e faz minha inscrição.",
+        hotwords=" ".join(_termos),
+        initial_prompt="Vocabulário: " + ", ".join(_termos[:15]) + ".",
+        vad_filter=True, vad_parameters={"min_silence_duration_ms": 500},
     )
     texto = " ".join(s.text.strip() for s in segmentos).strip()
     if normalizar(texto) in {normalizar(a) for a in ALUCINACOES}:
         return ""
-    return texto
+    return vocabulario.corrigir(texto)
 
 
 _FALA = r"""
