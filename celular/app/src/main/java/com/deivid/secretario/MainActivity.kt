@@ -154,6 +154,8 @@ private fun Configuracoes(modelo: ConversaModelo, fatos: Int, modifier: Modifier
     var nomeModelo by remember { mutableStateOf(inicial.modelo) }
     var chave by remember { mutableStateOf(inicial.chave) }
     var leitor by remember { mutableStateOf(false) }
+    val contexto = androidx.compose.ui.platform.LocalContext.current
+    var pacoteBloqueado by remember { mutableStateOf("") }
     var pareado by remember { mutableStateOf(modelo.configuracao.pareamento() != null) }
     val permissaoCamera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         leitor = ok
@@ -171,6 +173,16 @@ private fun Configuracoes(modelo: ConversaModelo, fatos: Int, modifier: Modifier
         }
         if (pareado) TextButton(onClick = { modelo.esquecerPc(); pareado = false }) { Text("Esquecer PC") }
         Text("Fatos aguardando sincronização: $fatos", color = MaterialTheme.colorScheme.onSurface)
+        Text("Acessibilidade: nunca bancos, senhas ou telas seguras. Operação exige Android 14+.")
+        Button(onClick = { contexto.startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) {
+            Text("Ativar Acessibilidade")
+        }
+        OutlinedTextField(pacoteBloqueado, { pacoteBloqueado = it }, label = { Text("Pacote para bloquear (só acrescentar)") })
+        Button(onClick = {
+            runCatching { ListaBloqueioUsuario(contexto).acrescentar(pacoteBloqueado) }
+                .onSuccess { pacoteBloqueado = ""; modelo.aviso.value = "App acrescentado ao bloqueio" }
+                .onFailure { modelo.aviso.value = "Pacote inválido" }
+        }) { Text("Acrescentar bloqueio") }
         Text("IA na nuvem", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
         Provedor.entries.forEach { p ->
             Row {

@@ -1,4 +1,4 @@
-﻿package com.deivid.secretario
+package com.deivid.secretario
 
 import android.Manifest
 import android.content.ClipData
@@ -46,9 +46,11 @@ class AbrirApp(ambiente: AmbienteAcoes) : AcaoIntent(ambiente) {
     override val parametros = esquema("pacote")
     override suspend fun executar(argumentos: JsonObject): String {
         val pacote = argumentos.texto("pacote")
-        require(pacote.isNotBlank() && !appFinanceiro(pacote)) { "App financeiro ou pacote inválido" }
+        val politica = BloqueioFinanceiro(ambiente.contexto.getSharedPreferences("bloqueio_acessibilidade", Context.MODE_PRIVATE)
+            .getStringSet("adicionais", emptySet()).orEmpty())
+        require(pacote.isNotBlank() && !politica.bloqueado(pacote)) { "App financeiro ou pacote inválido" }
         val info = ambiente.contexto.packageManager.getApplicationInfo(pacote, 0)
-        require(!appFinanceiro(pacote, ambiente.contexto.packageManager.getApplicationLabel(info).toString())) { "App financeiro" }
+        require(!politica.bloqueado(pacote, ambiente.contexto.packageManager.getApplicationLabel(info).toString())) { "App financeiro" }
         return abrir(ambiente.contexto.packageManager.getLaunchIntentForPackage(pacote) ?: error("App não encontrado"))
     }
 }
@@ -183,4 +185,4 @@ class ListarLembretes(ambiente: AmbienteAcoes) : AcaoIntent(ambiente) {
     override suspend fun executar(argumentos: JsonObject) = ambiente.lembretes.listar()
 }
 
-fun acoesCelular(ambiente: AmbienteAcoes) = RegistroAcoes(listOf(AbrirApp(ambiente), LerAgenda(ambiente), CriarEvento(ambiente), AlarmeTimer(ambiente), AbrirMapa(ambiente), PrepararMensagem(ambiente), Compartilhar(ambiente), AcaoLembrete(ambiente), ListarLembretes(ambiente)))
+fun acoesCelular(ambiente: AmbienteAcoes) = RegistroAcoes(listOf(AbrirApp(ambiente), LerAgenda(ambiente), CriarEvento(ambiente), AlarmeTimer(ambiente), AbrirMapa(ambiente), PrepararMensagem(ambiente), Compartilhar(ambiente), AcaoLembrete(ambiente), ListarLembretes(ambiente), OperarTela()))

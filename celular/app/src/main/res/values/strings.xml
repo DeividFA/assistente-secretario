@@ -9,4 +9,5 @@
         <item name="android:windowLightNavigationBar">false</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>
+    <string name="acessibilidade_descricao">Opera apps com confirmação. Nunca bancos, finanças, senhas ou telas seguras. Toque pausa; Parar encerra.</string>
 </resources>

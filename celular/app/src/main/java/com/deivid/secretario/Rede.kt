@@ -169,7 +169,8 @@ class ClienteNuvem(
             })
         }
         mensagens.add(buildJsonObject { put("role", "user"); put("content", texto) })
-        repeat(5) {
+        var chamadasExecutadas = 0
+        repeat(16) {
             val corpo = buildJsonObject {
                 put("model", config.modelo); put("messages", JsonArray(mensagens))
                 if (registro.acoes.isNotEmpty()) put("tools", JsonArray(registro.acoes.map { acao ->
@@ -195,6 +196,7 @@ class ClienteNuvem(
                 val funcao = o.getValue("function").jsonObject
                 val acao = registro.escolher(funcao.getValue("name").jsonPrimitive.content)
                 val resultado = try {
+                    check(++chamadasExecutadas <= 15) { "Limite de 15 passos atingido" }
                     if (acao == null) "Ação indisponível nesta versão." else acao.executar(
                         Json.parseToJsonElement(funcao.getValue("arguments").jsonPrimitive.content).jsonObject)
                 } catch (e: CancellationException) { throw e }

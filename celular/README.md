@@ -1,8 +1,8 @@
-# Secretário Android — C2/C3
+# Secretário Android — C2/C3/C4
 
 Base pessoal em Kotlin/Compose, tema escuro/menta, Android 10 ou superior.
 `RegistroAcoes` expõe as ações C3 à nuvem por chamadas de função.
-Não há Acessibilidade.
+A C4 acrescenta operação de apps não financeiros por Acessibilidade.
 
 ## Compilar e instalar (revisor)
 
@@ -137,3 +137,82 @@ T5; não há agendador de notificações Android em segundo plano. A ferramenta
 `listar_lembretes` inclui pendentes locais e a última cópia do PC. O roteamento
 da C2 permanece: PC disponível recebe o pedido; as ferramentas locais são usadas
 pelo caminho da nuvem.
+
+## Acessibilidade (C4)
+
+Em **Config. → Ativar Acessibilidade**, procure **Apps instalados → Secretário —
+operar apps** e habilite o serviço. Android 13+: se a opção estiver bloqueada após
+instalar o APK, abra **Configurações → Apps → Secretário → Informações do app →
+menu ⋮ → Permitir configurações restritas**, autentique-se e volte à Acessibilidade.
+Os nomes dos menus variam conforme o fabricante.
+
+A operação de tela exige **Android 14+**, embora as outras funções continuem no
+Android 10+. A Acessibilidade não fornece os flags da janela de outro app.
+Por isso, antes de solicitar a raiz e novamente antes de executar uma ação, o
+serviço usa `takeScreenshotOfWindow` (API 34) como verificação de janela segura.
+`FLAG_SECURE`, falha da captura, origem desconhecida ou mudança de janela
+interrompem a sessão. O buffer é fechado sem ler pixels, criar bitmap, persistir
+ou enviar imagem. Em versões anteriores, a operação falha antes de acessar nós.
+Referência: [AccessibilityService — captura por janela e SECURE_WINDOW](https://developer.android.com/reference/android/accessibilityservice/AccessibilityService#takeScreenshotOfWindow(int,java.util.concurrent.Executor,android.accessibilityservice.AccessibilityService.TakeScreenshotCallback)).
+
+Na nuvem, a ferramenta `operar_tela` aceita `iniciar`, `ler`, `tocar`, `preencher`,
+`rolar`, `voltar`, `gesto` e `parar`. Abra primeiro o app desejado (por exemplo com
+`abrir_app`). O usuário confirma a sessão no overlay; a IA lê índices compactos
+e atua um passo por vez, até 15 passos/chamadas por pedido. Após uma mutação deve
+ler novamente; índices são invalidados por mudanças de conteúdo. Gestos são
+somente toques dentro de um nó clicável sem filhos, não coordenadas livres.
+Todas as mutações pedem confirmação humana individual no overlay, incluindo
+publicar, enviar, comprar, apagar, aceitar e botões sem rótulo. Recusa, timeout de
+60 segundos e **Parar** encerram a sessão. Não há retomada automática.
+
+Um toque do usuário fora do painel pausa a automação imediatamente. O controlador
+de interação recebe o início e delega o toque original ao app. O painel é uma
+`TYPE_ACCESSIBILITY_OVERLAY`, com **Parar** sempre disponível durante a sessão;
+não requer permissão de sobreposição comum. A configuração pede somente eventos
+de janela/conteúdo, IDs, janelas interativas, árvore, gesto, captura para segurança
+e controle de interação para detectar o toque. Não habilita exploração por gestos
+para operar a interface: os toques são delegados normalmente.
+
+Eventos financeiros são descartados após consultar somente o pacote de origem,
+sem ler texto, descrição ou source. Cada nó é filtrado por pacote e `isPassword`
+antes de texto, IDs ou filhos; campos de senha nunca são lidos/preenchidos.
+Telas com senha ou indícios de login, CAPTCHA e códigos interrompem a sessão.
+Nenhum conteúdo dessas telas é retornado à IA. A árvore é limitada a 150 nós e
+30 níveis. Não há leitura automática de eventos, imagens nem notificações.
+
+**Config. → Pacote para bloquear → Acrescentar bloqueio** adiciona um pacote à
+lista privada persistida, sem opção de remoção. Isso também vale para `abrir_app`.
+A IA não recebe ferramenta para editar essa lista. A política é Kotlin pura em
+`BloqueioFinanceiro.kt`: lista fixa imutável, adicionais somente cumulativos,
+heurística por segmentos e prefixos/sufixos financeiros. `pay` usa segmento ou
+sufixo com exceções para palavras comuns (display, cosplay, screenplay, replay,
+roleplay, airplay, fairplay, gameplay); nomes genéricos como neon, next, original e
+rico não são bloqueados isoladamente. Spotify e WhatsApp ficam permitidos. A
+heurística não é um catálogo completo de todos os apps financeiros existentes;
+acrescente apps desconhecidos antes de usá-los. Não há exceção que libere fixos.
+
+Lista fixa (também bloqueia subpacotes; comparação sem distinção de caixa):
+
+```
+com.itau, com.itau.personnalite, com.itau.iti, com.bradesco, com.bradesco.next,
+br.com.bradesco, com.bradesco.netempresa, br.com.bb.android, br.com.bb.bbmobi,
+br.com.caixa, br.com.gabba.caixa, br.gov.caixa.tem, com.santander.app,
+com.santander.app.empresarial, com.nu.production, br.com.intermedium,
+com.c6bank.app, com.picpay, com.mercadopago.wallet, br.com.uol.ps.myaccount,
+br.com.uol.pagseguro, br.com.neon, com.next.banco, br.com.original.bank,
+com.btg.pactual.banking, com.btg.pactual.digital, br.com.xp.carteira,
+br.com.xpinc.mobile, br.com.rico.mobile, br.com.sicoobnet, br.com.sicredimobi,
+br.com.banrisul, com.binance.dev, com.coinbase.android, org.toshi,
+com.wallet.crypto.trustapp, io.metamask, exodusmovement.exodus, app.phantom,
+com.crypto.acct, piuk.blockchain.android, com.paypal.android.p2pmobile,
+com.google.android.apps.walletnfcrel, com.samsung.android.spay,
+com.revolut.revolut, com.transferwise.android
+```
+
+Os testes JVM do bloqueio cobrem todos os fixos e subpacotes, caixa/locale,
+heurística, falsos positivos, origem desconhecida, fronteiras de pacote,
+validação e cópia da lista adicional, imutabilidade dos fixos e adições cumulativas.
+O revisor executa `./gradlew testDebugUnitTest assembleDebug`. O Codex não rodou
+Gradle nem fez commit. Verificações isoladas não substituem testes em aparelho:
+validar toque, overlay, tela com senha, app bloqueado, janela FLAG_SECURE,
+confirmação recusada e invalidação de índices antes de uso real.
