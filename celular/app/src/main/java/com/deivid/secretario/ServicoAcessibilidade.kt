@@ -36,6 +36,11 @@ class ServicoAcessibilidade : AccessibilityService() {
     private var sobreposicao: LinearLayout? = null
     private var resposta: CompletableDeferred<Boolean>? = null
     private var politica = BloqueioFinanceiro()
+    private val banco by lazy { Banco.abrir(this) }
+    private var gravador: GravadorReceita? = null
+    private var postagemConcluida: GravadorReceita? = null
+    private var appReceita: String? = null
+    private var telaReceita = emptyList<ElementoReceita>()
     private val preferencias by lazy { getSharedPreferences("bloqueio_acessibilidade", MODE_PRIVATE) }
 
     companion object { var atual: ServicoAcessibilidade? = null; private set }
@@ -81,9 +86,11 @@ class ServicoAcessibilidade : AccessibilityService() {
     override fun onDestroy() {
         parar()
         if (Build.VERSION.SDK_INT >= 34) controlador?.unregisterAllCallbacks()
+        banco.close()
         atual = null; super.onDestroy()
     }
     private fun parar() {
+        gravador = null; appReceita = null; telaReceita = emptyList()
         pausado = true
         leitura = -1L
         assinatura = emptyList()
@@ -174,8 +181,20 @@ class ServicoAcessibilidade : AccessibilityService() {
     private fun resumo(no: AccessibilityNodeInfo) =
         "id=${no.viewIdResourceName.orEmpty().take(120)} texto=${no.text?.toString().orEmpty().take(250)} descrição=${no.contentDescription?.toString().orEmpty().take(150)} clicável=${no.isClickable} editável=${no.isEditable}"
 
-    suspend fun executar(acao: String, indice: Int?, texto: String, x: Float?, y: Float?, publicacao: Boolean = false): String =
+    suspend fun executar(acao: String, indice: Int?, texto: String, x: Float?, y: Float?, publicacao: Boolean = false, intencao: String = ""): String =
         withContext(Dispatchers.Main.immediate) { trava.withLock {
+            if (acao == "concluir") {
+                check(!pausado && pacote == appReceita && !politica.bloqueado(pacote)) { "Sessão inválida" }
+                janelaPermitida()
+                val candidato = gravador
+                val confirmado = confirmar("A sequência terminou com sucesso? Posso guardar os passos para a próxima vez?")
+                if (confirmado && !pausado) janelaPermitida()
+                val receita = if (!pausado && pacote == appReceita) candidato?.concluir(true, confirmado) else null
+                try {
+                    if (receita != null) banco.aprendizados().guardar(AprendizadoLocal("receita:${receita.app}:${receita.intencao}", receita.json()))
+                } finally { parar() }
+                return@withLock if (receita != null) "Receita guardada sem valores de campos." else "Receita não guardada."
+            }
             if (acao == "parar") { parar(); return@withLock "Automação parada." }
             if (acao == "iniciar") {
                 check(pausado) { "Sessão já ativa" }
@@ -185,6 +204,8 @@ class ServicoAcessibilidade : AccessibilityService() {
                 if (!confirmar("Permitir sessão de até 15 passos neste app?")) {
                     parar(); return@withLock "Sessão recusada ou pausada pelo toque."
                 }
+                appReceita = pacote
+                gravador = GravadorReceita(pacote.orEmpty(), intencao, politica)
             }
             check(!pausado) { "Pausado. Peça uma nova sessão ao usuário." }
             check(passos < 15) { parar(); "Limite de 15 passos atingido" }
@@ -195,12 +216,16 @@ class ServicoAcessibilidade : AccessibilityService() {
                 val nos = arvore(raiz)
                 check(!senhaEncontrada) { "Tela com campo de senha: automação recusada" }
                 check(nos.isNotEmpty()) { "Árvore bloqueada ou vazia" }
+                check(pacote == appReceita) { "App mudou durante a sequência" }
+                gravador?.protegerValores(nos.filter { it.isEditable }.map { it.text?.toString().orEmpty() })
                 // Não automatizar autenticação, CAPTCHA, códigos nem seus controles adjacentes.
                 check(nos.none { Regex("senha|password|login|log.?in|entrar|captcha|código|codigo|otp|autentica", RegexOption.IGNORE_CASE)
                     .containsMatchIn(resumo(it)) }) { "Tela de autenticação/código: operação recusada" }
                 if (acao in listOf("iniciar", "ler")) {
                     leitura = revisao
                     assinatura = nos.map(::resumo)
+                    telaReceita = nos.map { ElementoReceita(it.viewIdResourceName.orEmpty(),
+                        if (it.isEditable) "" else it.text?.toString().orEmpty(), it.isEditable) }
                     val tela = assinatura.mapIndexed { i, linha -> "$i $linha" }.joinToString("\n")
                     if (passos == 15) parar()
                     return@withLock tela
@@ -211,6 +236,8 @@ class ServicoAcessibilidade : AccessibilityService() {
                     nos.getOrNull(indice ?: -1) ?: error("Índice inválido; leia a tela") else null
                 val versao = revisao
                 val descricao = no?.let(::resumo).orEmpty()
+                val elemento = no?.let { ElementoReceita(it.viewIdResourceName.orEmpty(),
+                    if (it.isEditable) "" else it.text?.toString().orEmpty(), it.isEditable) }
                 // Confirma toda mutação: cobre publicar/enviar/comprar/apagar/aceitar inclusive ícones.
                 val confirmacao = ConfirmacaoPostagem()
                 val autorizado = if (publicacao || (acao in listOf("tocar", "gesto") &&
@@ -249,18 +276,66 @@ class ServicoAcessibilidade : AccessibilityService() {
                         }
                     }
                 }
+                gravador?.registrar(acao, elemento, texto, sucesso)
                 if (passos == 15) parar()
                 "${if (sucesso) "Ação executada" else "Ação recusada pelo app"}; leia a tela antes do próximo passo."
             } catch (e: Exception) { parar(); throw e }
         } }
 
+    suspend fun reutilizar(intencao: String, textos: List<String>, concluir: Boolean = true): String = withContext(Dispatchers.Main.immediate) {
+        require(intencao in GravadorReceita.INTENCOES)
+        check(!politica.bloqueado(pacote)) { "App bloqueado" }
+        val app = pacote ?: error("App desconhecido")
+        val chave = "receita:$app:$intencao"
+        val receita = banco.aprendizados().ler(chave)?.let(Receita::ler)
+            ?: return@withContext "Sem receita. Faça a sequência com a IA e conclua após o sucesso."
+        require(receita.app == app && receita.intencao == intencao)
+        require(textos.size == receita.passos.count { it.acao == "preencher" }) { "Forneça os textos deste pedido, um por preenchimento" }
+        try {
+            executar("iniciar", null, "", null, null, intencao = intencao)
+            var preenchimento = 0
+            for ((i, passo) in receita.passos.withIndex()) {
+                check(pacote == app && !politica.bloqueado(app)) { "App mudou ou foi bloqueado" }
+                if (i > 0) executar("ler", null, "", null, null)
+                val indice = passo.seletor.localizar(telaReceita) ?: error("Seletor mudou ou é ambíguo; a IA precisa refazer a partir desta tela")
+                val valor = if (passo.acao == "preencher") textos[preenchimento++] else ""
+                check(executar(passo.acao, indice, valor, null, null).startsWith("Ação executada")) { "Receita interrompida" }
+            }
+            if (concluir) executar("concluir", null, "", null, null)
+            else {
+                postagemConcluida = gravador
+                parar()
+                "Sequência executada; aguarde confirmação da publicação."
+            }
+        } catch (e: Exception) {
+            // A próxima execução aprende novamente; nenhuma repetição automática após ação parcial.
+            parar()
+            if (e is CancellationException) throw e
+            banco.aprendizados().apagar(chave)
+            throw e
+        }
+    }
+
     suspend fun publicarPostagem(item: RascunhoPostagem): Boolean {
+        postagemConcluida = null
         val esperado = if (item.rede == "LinkedIn") "com.linkedin.android" else "com.instagram.android"
         withTimeout(60000) {
             while (pacote != esperado || windows.none { it.isActive && it.id == janela }) delay(250)
         }
+        check(!politica.bloqueado(esperado)) { "App bloqueado" }
+        val salva = banco.aprendizados().ler("receita:$esperado:postagem")?.let(Receita::ler)
+        if (salva != null) {
+            try {
+                return reutilizar("postagem", List(salva.passos.count { it.acao == "preencher" }) { item.texto }, concluir = false)
+                    .startsWith("Sequência executada")
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                // Não repetir uma ação parcial: o usuário revisa e a IA pode refazer da tela atual.
+                throw IllegalStateException("Receita mudou ou foi interrompida; revise a tela e peça à IA para continuar", e)
+            }
+        }
         try {
-            var tela = executar("iniciar", null, "", null, null)
+            var tela = executar("iniciar", null, "", null, null, intencao = "postagem")
             var preenchido = false
             repeat(4) {
                 check(pacote == esperado) { "O app mudou; publicação interrompida" }
@@ -276,7 +351,9 @@ class ServicoAcessibilidade : AccessibilityService() {
                         Regex("(?:texto|descrição)=(?:Publicar|Compartilhar|Post|Share)(?= descrição=| clicável=|$)", RegexOption.IGNORE_CASE).containsMatchIn(it) }
                     if (publicar != null) {
                         // O texto pode ter vindo preenchido pelo intent; o usuário revisa na tela alvo.
-                        return executar("tocar", indice(publicar), "", null, null, publicacao = true).startsWith("Ação executada")
+                        val sucesso = executar("tocar", indice(publicar), "", null, null, publicacao = true).startsWith("Ação executada")
+                        if (sucesso) postagemConcluida = gravador
+                        return sucesso
                     }
                     val proximo = linhas.firstOrNull { it.contains("clicável=true") &&
                         Regex("texto=(Avançar|Seguinte|Next)(?= descrição=)", RegexOption.IGNORE_CASE).containsMatchIn(it) }
@@ -287,6 +364,13 @@ class ServicoAcessibilidade : AccessibilityService() {
             }
             error("Limite de preparação atingido")
         } finally { executar("parar", null, "", null, null) }
+    }
+
+    suspend fun confirmarReceitaPostagem(confirmado: Boolean) {
+        val candidato = postagemConcluida
+        postagemConcluida = null
+        val receita = candidato?.concluir(true, confirmado) ?: return
+        banco.aprendizados().guardar(AprendizadoLocal("receita:${receita.app}:${receita.intencao}", receita.json()))
     }
 
     fun acrescentarBloqueio(pacote: String) {

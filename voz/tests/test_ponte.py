@@ -31,6 +31,26 @@ def preparar(tmp_path):
     return p, {'Authorization': 'Bearer ' + token}, chamadas
 
 
+def test_bugs_aceita_melhoria_e_rejeita_tipo_invalido(tmp_path):
+    async def verificar():
+        p, headers, _ = preparar(tmp_path)
+        async with TestClient(TestServer(p.criar_app())) as cliente:
+            for _ in range(2):
+                resposta = await cliente.post('/bugs', headers=headers,
+                                             json={'texto': 'Não sabe exportar agenda', 'tipo': 'melhoria'})
+                assert resposta.status == 201
+            assert (await cliente.post('/bugs', headers=headers,
+                                       json={'texto': 'teste', 'tipo': 'outro'})).status == 400
+            assert (await cliente.post('/bugs', headers=headers,
+                                       json={'texto': 'teste', 'tipo': None})).status == 400
+        with p.conectar() as con:
+            linhas = list(con.execute('SELECT tipo, ocorrencias FROM bugs'))
+            assert len(linhas) == 1
+            assert linhas[0]['tipo'] == 'melhoria'
+            assert linhas[0]['ocorrencias'] == 2
+    asyncio.run(verificar())
+
+
 def test_autenticacao_revogacao_limite_e_auditoria(tmp_path):
     async def verificar():
         p, headers, chamadas = preparar(tmp_path)

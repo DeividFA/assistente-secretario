@@ -23,6 +23,7 @@ android {
 }
 ksp { arg("room.schemaLocation", "$projectDir/schemas") }
 dependencies {
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.foundation)

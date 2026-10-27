@@ -291,3 +291,46 @@ Revisor: executar voz/tests/test_postagens.py, os testes existentes de
 memória/ponte e PostagensTest (JVM). Validar no aparelho edição, prévia da
 galeria, PC ausente com cache, recusa/Parar antes de publicar, mudança de
 tela, publicação confirmada e reenvio do histórico sem duplicação.
+
+### C7 — Crescer com o uso
+
+Room v3 adiciona somente `aprendizados` pela migração 2→3; mensagens, fatos e
+gastos permanecem intactos. A cadeia 1→2→3 continua registrada, sem fallback
+destrutivo. O schema 2 exportado permanece preservado; o KSP exporta o 3 na
+compilação do revisor.
+
+Na Acessibilidade, `iniciar` recebe uma intenção do catálogo (mensagem, postagem,
+pesquisa ou outro). `concluir` só deve ser chamado depois do sucesso: pergunta ao
+usuário se tudo terminou e se pode guardar. Parar, recusar, erro, gestos ou alvo
+sem seletor seguro não geram receita. Só persistem app, intenção e ações com
+seletores por id ou texto estático; campos editáveis exigem id. Valores digitados
+nunca são serializados, inclusive quando reaparecem em rótulos selecionados.
+
+`reutilizar` recebe textos novos do pedido atual, um por preenchimento, e valida
+seletor único a cada tela. Mudança ou ambiguidade interrompe e invalida a receita;
+a IA deve continuar da tela atual e reaprender, sem repetir ações anteriores.
+Todas as mutações passam pela confirmação existente, inclusive ações finais.
+Postagens também aprendem e reutilizam; a gravação aguarda a confirmação de que
+a publicação apareceu. BloqueioFinanceiro continua obrigatório em cada etapa.
+
+O primeiro padrão de rotina suportado é a leitura da agenda: leituras locais
+bem-sucedidas na nuvem e pedidos de agenda aceitos na fila do PC alimentam o
+histórico de uso, por dia da semana/hora.
+Exige três ocorrências em três semanas distintas. Uma sugestão é mostrada por
+vez; aceitar agenda uma leitura semanal com WorkManager, após permissões de
+agenda/notificações. Recusa fica registrada para não insistir. O Android pode
+adiar a execução por economia de bateria. A agenda aparece na conversa com uma
+notificação que abre o app, sem automação de ações finais.
+
+Quando falta uma capacidade, a nuvem chama `pedido_nao_atendido`: o pedido fica
+numa fila persistente e segue por POST /bugs com tipo `melhoria` quando o PC
+reconecta. O PC deduplica melhorias repetidas. Cancelamentos e bloqueios de
+segurança não devem gerar melhorias. /bugs mantém `bug` como tipo padrão e
+rejeita tipos desconhecidos.
+
+Revisor: executar CrescimentoTest e os testes Python de ponte/diagnóstico;
+compilar; atualizar instalação com schema 2 contendo mensagens/fatos/gastos e
+conferir preservação. No aparelho, verificar receita com texto diferente,
+seletor alterado/duplicado, app bloqueado, recusa da ação final e da gravação,
+sugestão recusada/aceita e fila de melhorias offline. Gradle e pytest não foram
+executados pelo Codex.

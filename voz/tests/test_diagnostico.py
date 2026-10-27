@@ -6,6 +6,21 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import diagnostico
 import registro
+import pytest
+
+
+def test_melhoria_separada_de_bug_e_tipo_validado(tmp_path):
+    banco = tmp_path / 'bugs.db'
+    bug = diagnostico.registrar_bug('celular', RuntimeError('Mesmo pedido'), banco=banco)
+    melhoria = diagnostico.registrar_bug('celular', RuntimeError('Mesmo pedido'), tipo='melhoria', banco=banco)
+    repetida = diagnostico.registrar_bug('celular', RuntimeError('Mesmo pedido'), tipo='melhoria', banco=banco)
+    assert bug != melhoria
+    assert repetida == melhoria
+    assert registro.detalhe_bug(bug, banco)['tipo'] == 'bug'
+    assert registro.detalhe_bug(melhoria, banco)['tipo'] == 'melhoria'
+    assert registro.detalhe_bug(melhoria, banco)['ocorrencias'] == 2
+    with pytest.raises(ValueError):
+        diagnostico.registrar_bug('celular', RuntimeError('teste'), tipo='outro', banco=banco)
 
 
 def test_assinatura_ignora_linhas():

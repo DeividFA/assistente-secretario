@@ -49,17 +49,34 @@ interface Dados {
     @Query("DELETE FROM fatos_pendentes WHERE id IN (:ids)") suspend fun confirmar(ids: List<Long>)
 }
 
-@Database(entities = [MensagemLocal::class, FatoPendente::class, GastoLocal::class], version = 2, exportSchema = true)
+@Entity(tableName = "aprendizados")
+data class AprendizadoLocal(@PrimaryKey val chave: String, val conteudo: String)
+
+@Dao
+interface DadosAprendizados {
+    @Query("SELECT conteudo FROM aprendizados WHERE chave=:chave") suspend fun ler(chave: String): String?
+    @Query("SELECT * FROM aprendizados WHERE chave LIKE :prefixo ORDER BY chave") suspend fun listar(prefixo: String): List<AprendizadoLocal>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun guardar(item: AprendizadoLocal)
+    @Query("DELETE FROM aprendizados WHERE chave=:chave") suspend fun apagar(chave: String)
+}
+
+@Database(entities = [MensagemLocal::class, FatoPendente::class, GastoLocal::class, AprendizadoLocal::class], version = 3, exportSchema = true)
 abstract class Banco : RoomDatabase() {
     abstract fun dados(): Dados
     abstract fun gastos(): DadosGastos
+    abstract fun aprendizados(): DadosAprendizados
     companion object {
         val MIGRACAO_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS `gastos` (`id` TEXT NOT NULL, `data` TEXT NOT NULL, `valor_centavos` INTEGER NOT NULL, `descricao` TEXT NOT NULL, `estabelecimento` TEXT NOT NULL, `categoria` TEXT NOT NULL, `forma` TEXT NOT NULL, `origem` TEXT NOT NULL, `confirmado` INTEGER NOT NULL, `sincronizado` INTEGER NOT NULL, PRIMARY KEY(`id`))")
             }
         }
+        val MIGRACAO_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `aprendizados` (`chave` TEXT NOT NULL, `conteudo` TEXT NOT NULL, PRIMARY KEY(`chave`))")
+            }
+        }
         fun abrir(contexto: Context): Banco = Room.databaseBuilder(contexto, Banco::class.java, "secretario.db")
-            .addMigrations(MIGRACAO_1_2).build()
+            .addMigrations(MIGRACAO_1_2, MIGRACAO_2_3).build()
     }
 }

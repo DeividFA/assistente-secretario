@@ -11,6 +11,8 @@ class ConversaModelo(aplicacao: Application) : AndroidViewModel(aplicacao) {
     val configuracao = Configuracao(aplicacao)
     private val banco = Banco.abrir(aplicacao)
     private val dados = banco.dados()
+    private val aprendizados = banco.aprendizados()
+    private val rotinas = RotinasCelular(aplicacao, aprendizados)
     val mensagens = dados.mensagens().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val fatos = dados.quantidadeFatos().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
     val fila = MutableStateFlow<List<TarefaPc>>(emptyList())
@@ -53,7 +55,10 @@ class ConversaModelo(aplicacao: Application) : AndroidViewModel(aplicacao) {
     }, { conectado.value = it })
     private val registroAcoes = acoesCelular(AmbienteAcoes(aplicacao, interfaceAcoes::confirmar,
         interfaceAcoes::permitir, interfaceAcoes::abrir, lembretes))
-    private val roteador = Roteador(pc, ClienteNuvem(configuracao::nuvem, registroAcoes, dados::recentes))
+    private val roteador = Roteador(pc, ClienteNuvem(configuracao::nuvem, registroAcoes, dados::recentes,
+        naoAtendido = { pedido ->
+            aprendizados.guardar(AprendizadoLocal("melhoria:${java.util.UUID.randomUUID()}", pedido.take(1000)))
+        }, acaoConcluida = { nome -> if (nome == "ler_agenda") rotinas.registrarAgenda() }))
     private var observacao: Job? = null
 
     fun iniciar() {
@@ -65,6 +70,10 @@ class ConversaModelo(aplicacao: Application) : AndroidViewModel(aplicacao) {
                     if (pareamento != null && withTimeoutOrNull(1500) { pc.conectar(pareamento) } == true) {
                         configuracao.guardarPerfilEstilo(pc.perfilEstilo())
                         sincronizarPostagens()
+                        for (item in aprendizados.listar("melhoria:%")) {
+                            pc.registrarMelhoria(item.conteudo)
+                            aprendizados.apagar(item.chave)
+                        }
                         lembretes.sincronizar(pc)
                         gastos.sincronizar(pc)
                         val pendentes = dados.fatos()
@@ -116,13 +125,18 @@ class ConversaModelo(aplicacao: Application) : AndroidViewModel(aplicacao) {
             try {
                 dados.inserir(MensagemLocal(autor = "Você", texto = texto.trim(), origem = "Celular"))
                 when (val resposta = roteador.enviar(texto, configuracao.pareamento())) {
-                    is Resposta.Pc -> { cerebro.value = "PC"; estado.value = "Enfileirado: ${resposta.tarefas.joinToString()}" }
+                    is Resposta.Pc -> {
+                        cerebro.value = "PC"; estado.value = "Enfileirado: ${resposta.tarefas.joinToString()}"
+                        if (Regex("\\bagenda\\b|o que (eu )?tenho (hoje|amanhã|amanha)", RegexOption.IGNORE_CASE).containsMatchIn(texto))
+                            rotinas.registrarAgenda()
+                    }
                     is Resposta.Nuvem -> {
                         cerebro.value = "Nuvem"
                         dados.inserir(MensagemLocal(autor = "Secretário", texto = resposta.texto, origem = "Nuvem"))
                         falar.emit(resposta.texto)
                     }
                 }
+                rotinas.sugerir(interfaceAcoes::confirmar, interfaceAcoes::permitir)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 aviso.value = "Não foi possível concluir (${e.message}). Se o PC recebeu, confira a fila antes de repetir."
@@ -198,7 +212,9 @@ class ConversaModelo(aplicacao: Application) : AndroidViewModel(aplicacao) {
             val servico = ServicoAcessibilidade.atual ?: error("Ative a Acessibilidade")
             if (servico.publicarPostagem(item)) {
                 // Um clique aceito não prova que o servidor da rede concluiu a publicação.
-                if (interfaceAcoes.confirmar("A postagem apareceu publicada no ${item.rede}?")) {
+                val confirmada = interfaceAcoes.confirmar("A postagem apareceu publicada no ${item.rede}? Posso guardar os passos sem o texto para a próxima vez?")
+                servico.confirmarReceitaPostagem(confirmada)
+                if (confirmada) {
                     val pendentes = Json.parseToJsonElement(configuracao.postagensPendentes()).jsonArray
                     val recibo = buildJsonObject {
                         put("id", java.util.UUID.randomUUID().toString()); put("rede", item.rede); put("texto", item.texto)

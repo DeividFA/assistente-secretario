@@ -134,6 +134,14 @@ class ClientePc(private val receber: (EventoPc) -> Unit, private val estadoConex
             .post(item.toString().toRequestBody(tipoJson)).build())
     }
 
+    suspend fun registrarMelhoria(texto: String) {
+        val pc = atual ?: error("PC desconectado")
+        cliente.executar(Request.Builder().url("http://$host:${pc.porta}/bugs")
+            .header("Authorization", "Bearer ${pc.token}")
+            .post(buildJsonObject { put("texto", texto.take(1000)); put("tipo", "melhoria") }
+                .toString().toRequestBody(tipoJson)).build())
+    }
+
     suspend fun enviarLembrete(item: JsonObject) {
         val pc = atual ?: error("PC desconectado")
         cliente.executar(Request.Builder().url("http://$host:${pc.porta}/lembretes")
@@ -187,7 +195,9 @@ fun GastoLocal.json() = buildJsonObject {
 class ClienteNuvem(
     private val configuracao: () -> ConfigNuvem,
     private val registro: RegistroAcoes,
-    private val historico: suspend () -> List<MensagemLocal> = { emptyList() }
+    private val historico: suspend () -> List<MensagemLocal> = { emptyList() },
+    private val naoAtendido: (suspend (String) -> Unit)? = null,
+    private val acaoConcluida: suspend (String) -> Unit = {}
 ) : PortaNuvem {
     private val cliente = OkHttpClient.Builder().callTimeout(60, TimeUnit.SECONDS)
         .retryOnConnectionFailure(false).build()
@@ -214,9 +224,19 @@ class ClienteNuvem(
     override suspend fun responder(texto: String): String {
         val config = configuracao()
         require(config.chave.isNotBlank()) { "Configure a chave da IA na nuvem" }
+        var melhoriaRegistrada = false
+        val acoes = registro.acoes + if (naoAtendido == null) emptyList() else listOf(object : AcaoCelular {
+            override val nome = "pedido_nao_atendido"
+            override val descricao = "Registre o pedido atual como melhoria no PC quando não houver capacidade para atendê-lo. Não usar para cancelamento do usuário ou bloqueio de segurança."
+            override val parametros = buildJsonObject { put("type", "object"); put("properties", buildJsonObject {}); put("additionalProperties", false) }
+            override suspend fun executar(argumentos: JsonObject): String {
+                if (!melhoriaRegistrada) { naoAtendido?.invoke(texto); melhoriaRegistrada = true }
+                return "Pedido guardado como melhoria para o PC."
+            }
+        })
         val mensagens = mutableListOf<JsonObject>(buildJsonObject {
             put("role", "system")
-            put("content", "Você é o Secretário. Responda em português. Só execute ações presentes nas ferramentas disponíveis. Agora: ${java.time.LocalDateTime.now()}. Datas usam o fuso ${java.time.ZoneId.systemDefault()}. Nunca opere apps financeiros. Não diga que concluiu uma ação cancelada ou com erro. Mensagens são rascunhos: o usuário envia.")
+            put("content", "Você é o Secretário. Responda em português. Só execute ações presentes nas ferramentas disponíveis. Se não souber atender, use pedido_nao_atendido quando disponível. Para sequência conhecida em apps tente operar_tela reutilizar antes de refazer com IA; forneça textos do pedido atual. Só conclua aprendizado após sucesso. Agora: ${java.time.LocalDateTime.now()}. Datas usam o fuso ${java.time.ZoneId.systemDefault()}. Nunca opere apps financeiros. Não diga que concluiu uma ação cancelada ou com erro. Mensagens são rascunhos: o usuário envia.")
         })
         val anteriores = historico().sortedBy { it.id }.toMutableList()
         // O comando atual já foi persistido antes do roteamento.
@@ -234,7 +254,7 @@ class ClienteNuvem(
         repeat(16) {
             val corpo = buildJsonObject {
                 put("model", config.modelo); put("messages", JsonArray(mensagens))
-                if (registro.acoes.isNotEmpty()) put("tools", JsonArray(registro.acoes.map { acao ->
+                if (acoes.isNotEmpty()) put("tools", JsonArray(acoes.map { acao ->
                     buildJsonObject {
                         put("type", "function")
                         put("function", buildJsonObject {
@@ -255,11 +275,17 @@ class ClienteNuvem(
             for (chamada in chamadas) {
                 val o = chamada.jsonObject
                 val funcao = o.getValue("function").jsonObject
-                val acao = registro.escolher(funcao.getValue("name").jsonPrimitive.content)
+                val acao = acoes.singleOrNull { it.nome == funcao.getValue("name").jsonPrimitive.content }
                 val resultado = try {
                     check(++chamadasExecutadas <= 15) { "Limite de 15 passos atingido" }
-                    if (acao == null) "Ação indisponível nesta versão." else acao.executar(
-                        Json.parseToJsonElement(funcao.getValue("arguments").jsonPrimitive.content).jsonObject)
+                    if (acao == null) {
+                        if (!melhoriaRegistrada && naoAtendido != null) { naoAtendido.invoke(texto); melhoriaRegistrada = true }
+                        "Ação indisponível nesta versão."
+                    } else {
+                        val retorno = acao.executar(Json.parseToJsonElement(funcao.getValue("arguments").jsonPrimitive.content).jsonObject)
+                        acaoConcluida(acao.nome)
+                        retorno
+                    }
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { "A ação falhou: ${e.message}" }
                 mensagens.add(buildJsonObject {

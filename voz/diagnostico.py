@@ -34,6 +34,8 @@ def assinatura(erro, traceback=None, origem='motor'):
 
 
 def registrar_bug(origem, erro, traceback=None, contexto=None, tipo='bug', banco=registro.BANCO):
+    if tipo not in ('bug', 'melhoria'):
+        raise ValueError('Tipo deve ser bug ou melhoria')
     try:
         contexto = contexto or {}
         seguro = {k: limpar(v, 200) for k, v in contexto.items()

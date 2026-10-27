@@ -232,8 +232,11 @@ class Ponte:
         dados = await request.json()
         if not isinstance(dados, dict) or not isinstance(dados.get('texto'), str) or not dados['texto'].strip():
             raise web.HTTPBadRequest()
+        tipo = dados.get('tipo', 'bug')
+        if tipo not in ('bug', 'melhoria'):
+            raise web.HTTPBadRequest(text='Tipo inválido')
         id = await asyncio.to_thread(diagnostico.registrar_bug, 'celular',
-                                    RuntimeError(dados['texto']), banco=self.banco)
+                                    RuntimeError(dados['texto']), tipo=tipo, banco=self.banco)
         return web.json_response(dict(id=id), status=201 if id is not None else 503)
 
     async def listar_lembretes(self, request):
