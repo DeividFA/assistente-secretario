@@ -52,7 +52,7 @@ def _campo(caminho, rotulo):
         texto = caminho.read_text(encoding='utf-8')
     except OSError:
         return ''
-    achado = re.search(r'^\W*' + re.escape(rotulo) + r'\W*:\s*\**\s*(.+)$', texto, re.M | re.I)
+    achado = re.search(r'^[-* \t]*\**' + re.escape(rotulo) + r'\**[ \t]*:[ \t]*\**[ \t]*([^\n]*)$', texto, re.M | re.I)
     return achado.group(1).strip(' *') if achado else ''
 
 
@@ -421,3 +421,79 @@ def registrar_diario(pergunta, resposta, cofre=COFRE, agora=None):
     resposta = " ".join(str(resposta).split())[:300]
     with caminho.open("a", encoding="utf-8") as arquivo:
         arquivo.write(f'- {agora:%H:%M} — **Você:** {pergunta} → **Secretário:** {resposta}\n')
+
+
+# Campos da apresentação: rótulos explícitos, sem importar documentos ou endereço.
+CAMPOS_PERFIL = {
+    'nome': ('Perfil/Dados pessoais.md', ('Como prefere ser chamado', 'Nome', 'Nome completo')),
+    'ocupacao': ('Perfil/Dados pessoais.md', ('Ocupação', 'Profissão', 'Cargo atual', 'Cargo')),
+    'cidade': ('Perfil/Dados pessoais.md', ('Cidade',)),
+    'rotina': ('Preferências/Estilo.md', ('Rotina',)),
+    'tarefas': ('Perfil/Aprendizados.md', ('Tarefas a delegar',)),
+    'interesses_livres': ('Preferências/Estilo.md', ('Outros interesses',)),
+    'estilo': ('Preferências/Estilo.md', ('Estilo das respostas',)),
+    'nunca': ('Preferências/Estilo.md', ('Nunca fazer sem perguntar',)),
+}
+
+
+def _cidade_perfil(valor):
+    valor = ' '.join(valor.split())
+    if re.search(r'\d|\b(rua|avenida|av\.|travessa|bairro|cep|apartamento|rodovia|endereço)\b', valor, re.I):
+        return ''
+    return valor
+
+
+def ler_perfil_inicial(cofre=COFRE):
+    cofre = Path(cofre)
+    respostas = {}
+    for chave, (arquivo, rotulos) in CAMPOS_PERFIL.items():
+        caminhos = [cofre / arquivo]
+        if chave == 'ocupacao':
+            caminhos += sorted((cofre / 'Perfil').glob('*Experiência*.md'))
+            caminhos += [cofre / 'Experiência.md']
+        respostas[chave] = next((_campo(caminho, rotulo) for caminho in caminhos
+                                 for rotulo in rotulos if _campo(caminho, rotulo)), '')
+    respostas['cidade'] = _cidade_perfil(respostas['cidade'])
+    respostas['interesses'] = [assunto for assunto in ASSUNTOS
+                              if _campo(cofre / 'Assuntos' / f'{assunto}.md', 'Interesse do usuário')
+                              or 'Interesse do Deivid' in ((cofre / 'Assuntos' / f'{assunto}.md').read_text(encoding='utf-8')
+                                  if (cofre / 'Assuntos' / f'{assunto}.md').exists() else '')]
+    return respostas
+
+
+def salvar_perfil_inicial(respostas, cofre=COFRE):
+    if not isinstance(respostas, dict):
+        raise ValueError('Respostas inválidas')
+    cofre = Path(cofre)
+    preparar_cofre(cofre)
+    alterados = []
+    for chave, (arquivo, rotulos) in CAMPOS_PERFIL.items():
+        valor = respostas.get(chave)
+        if not isinstance(valor, str) or not valor.strip():
+            continue
+        valor = ' '.join(valor.split())
+        if chave == 'cidade':
+            valor = _cidade_perfil(valor)
+        if not valor:
+            continue
+        caminho = cofre / arquivo
+        caminho.parent.mkdir(parents=True, exist_ok=True)
+        texto = caminho.read_text(encoding='utf-8') if caminho.exists() else f'# {caminho.stem}\n\n'
+        rotulo = next((r for r in rotulos if _campo(caminho, r)), rotulos[0])
+        padrao = r'^[-* \t]*\**' + re.escape(rotulo) + r'\**[ \t]*:[^\n]*$'
+        linha = f'- {rotulo}: {valor}'
+        texto = re.sub(padrao, lambda m: linha, texto, flags=re.M | re.I) if re.search(padrao, texto, re.M | re.I) else texto.rstrip() + '\n' + linha + '\n'
+        caminho.write_text(texto, encoding='utf-8')
+        alterados.append(arquivo)
+    interesses = respostas.get('interesses', [])
+    if isinstance(interesses, list):
+        for assunto in ASSUNTOS:
+            if assunto not in interesses:
+                continue
+            caminho = cofre / 'Assuntos' / f'{assunto}.md'
+            texto = caminho.read_text(encoding='utf-8')
+            if 'Interesse do Deivid' not in texto:
+                caminho.write_text(texto.rstrip() + '\n- Interesse do Deivid — [[Perfil/Dados pessoais]]\n', encoding='utf-8')
+                alterados.append(f'Assuntos/{assunto}.md')
+    indexar(cofre)
+    return alterados

@@ -70,6 +70,7 @@
             <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4zM15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/><path class="risco" d="M4 4l16 16"/></svg>
             <span>Silenciar</span>
           </button>
+          <button class="voz-botao" id="refazer-apresentacao">Refazer apresentação</button>
           <button class="voz-botao" id="btn-vozes" title="Escolher voz de resposta"><span>Voz</span></button>
         </div>
       </section>
@@ -139,6 +140,19 @@
     <div class="vozes-topo"><h2 id="titulo-problemas">Problemas</h2><button id="fechar-problemas">Fechar</button></div>
     <p>Corrigir pede sua confirmação na conversa antes de começar.</p>
     <div id="lista-problemas"></div>
+  </dialog>
+  <dialog id="apresentacao" aria-labelledby="perfil-titulo">
+    <h2 id="perfil-titulo">Confira seu perfil</h2>
+    <p>Já trouxe os dados salvos no cofre. Você só precisa conferir e completar o que faltar.</p>
+    <progress id="perfil-progresso" max="8" value="1" aria-label="Progresso da apresentação"></progress>
+    <h3 id="perfil-pergunta"></h3>
+    <div id="perfil-opcoes"></div>
+    <textarea id="perfil-resposta" rows="3" aria-label="Resposta"></textarea>
+    <p id="perfil-aviso" role="status"></p>
+    <div class="perfil-acoes">
+      <button id="perfil-ditar">Microfone</button><button id="perfil-voltar">Voltar</button>
+      <button id="perfil-pular">Pular</button><button id="perfil-proximo">Próximo</button>
+    </div>
   </dialog>
   <script src="renderer.js"></script>
 </body>

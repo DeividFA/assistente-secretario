@@ -53,7 +53,7 @@ IPC = "--ipc" in sys.argv
 ATIVACAO = re.compile(r"\bsecret[aá]ri[oa]\b[\s,.!?:;-]*", re.I)
 JANELA_CONVERSA = 15  # segundos após uma resposta em que dá para responder sem dizer "secretário"
 LOG = BASE / "log_voz.txt"
-PROMPT_VOZ = (BASE / "voz_prompt.md").read_text(encoding="utf-8")
+PROMPT_VOZ = (BASE / "voz_prompt.md").read_text(encoding="utf-8") + "\nSiga as preferências de Preferências/Estilo.md do cofre."
 CLAUDE = shutil.which("claude") or str(Path.home() / ".local" / "bin" / "claude.exe")
 # Motor do cérebro escolhido entre os nomes do registro de provedores.
 ARQ_MOTOR = BASE / "motor.txt"
@@ -155,6 +155,8 @@ def escolher_motor(preferido, ocupacao, disponiveis, ordem, vagas):
 class Assistente:
     def __init__(self):
         self.mic = Microfone(abrir=False)
+        self.ditado_pendente = False
+        self.ditando = False
         self.config_mic = config.carregar()
         self.config_mic['ponte_ativa'] = False
         self.ponte = None
@@ -814,13 +816,36 @@ class Assistente:
             registrar('ERRO', f'Fila: {e}')
             emitir(evento='erro', texto=f'Não consegui anotar o pedido: {e}')
 
+    def emitir_perfil(self):
+        emitir(evento="perfil_atual", respostas=memoria.ler_perfil_inicial(),
+               assuntos=list(memoria.ASSUNTOS), concluido=config.carregar().get("perfil_inicial") is True)
+
     def ouvir_comando(self):
+        if self.ditado_pendente:
+            self.ditado_pendente = False
+            try:
+                self.consultar_microfone()
+                if self.mic.pausado or (self.apps_mic and self.config_mic.get("mic_em_chamada") == "liberar"):
+                    emitir(evento="ditado", texto="", erro="Microfone liberado ou mudo; digite a resposta.")
+                    return None
+                self.ditando = True
+                self.comando_mic_ate = 0.0
+                self.atualizar_microfone()
+                audio = self.mic.gravar_fala(espera_max=8) if self.mic.stream is not None else None
+                emitir(evento="ditado", texto=transcrever(audio) if audio is not None else "")
+            except Exception as erro:
+                emitir(evento="ditado", texto="", erro=str(erro))
+            finally:
+                self.ditando = False
+                self.comando_mic_ate = 0.0
+                self.atualizar_microfone()
+            return None
         self.atualizar_microfone()
         if self.mic.stream is None:
             time.sleep(0.1)
             return None
         audio = self.mic.gravar_fala(espera_max=0.5, detalhado=True)
-        if audio is None:
+        if audio is None or self.ditado_pendente:
             return None
         em_conversa = time.monotonic() < self.conversa_ate
         audio, pausas = audio
@@ -881,7 +906,7 @@ class Assistente:
         if agora >= self.conversa_ate and not pedido:
             self.demanda_ativa = False
         abrir = not self.mic.pausado and (pedido or (not chamada and (
-            not demanda or (self.demanda_ativa and agora < self.conversa_ate))))
+            self.ditando or not demanda or (self.demanda_ativa and agora < self.conversa_ate))))
         if abrir:
             ok = self.mic.retomar()
             estado = "ouvindo" if ok else "indisponivel"
@@ -906,7 +931,7 @@ class Assistente:
             chamada = self.apps_mic and self.config_mic.get("mic_em_chamada") == "liberar"
             agora = time.monotonic()
             expirou = (self.config_mic.get("modo_microfone") == "sob_demanda"
-                       and agora >= max(self.comando_mic_ate, self.conversa_ate))
+                       and not self.ditando and agora >= max(self.comando_mic_ate, self.conversa_ate))
             if self.mic.pausado or expirou or (chamada and agora >= self.comando_mic_ate):
                 self.mic.liberar()
             time.sleep(0.2)
@@ -919,6 +944,23 @@ class Assistente:
             except json.JSONDecodeError:
                 continue
             tipo = cmd.get("cmd")
+            if tipo == "perfil_atual":
+                self.emitir_perfil()
+                continue
+            if tipo == "ditar":
+                self.ditado_pendente = True
+                continue
+            if tipo == "perfil_inicial":
+                try:
+                    memoria.salvar_perfil_inicial(cmd.get("respostas"))
+                    caminho = BASE / "config.json"
+                    salvo = json.loads(caminho.read_text(encoding="utf-8")) if caminho.exists() else {}
+                    salvo["perfil_inicial"] = True
+                    caminho.write_text(json.dumps(salvo, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                    emitir(evento="perfil_salvo")
+                except Exception as erro:
+                    emitir(evento="perfil_erro", texto=f"Não consegui salvar a apresentação: {erro}")
+                continue
             if tipo == "bugs":
                 self.emitir_bugs()
                 continue
@@ -1176,6 +1218,7 @@ class Assistente:
         aquecer_voz()
         if IPC:
             self.emitir_vozes()
+            self.emitir_perfil()
             threading.Thread(target=self.ler_app, daemon=True).start()
             threading.Thread(target=self.emitir_nivel, daemon=True).start()
         registrar("Sistema", f"ouvindo (limiar de voz {self.mic.limiar:.3f}). Diga 'secretário' + comando.")

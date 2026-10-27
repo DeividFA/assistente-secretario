@@ -337,6 +337,33 @@ $('fechar-vozes').onclick = () => $('painel-vozes').close();
 
 window.secretario.aoEvento((ev) => {
   switch (ev.evento) {
+    case 'perfil_atual':
+      if (!perfilEditando) {
+        perfilRespostas = ev.respostas;
+        perfilAssuntos = ev.assuntos;
+        if (!ev.concluido || perfilRefazer) abrirPerfil();
+      }
+      break;
+    case 'perfil_salvo':
+      perfilEditando = false;
+      $('apresentacao').close();
+      break;
+    case 'perfil_erro':
+      $('perfil-aviso').textContent = ev.texto;
+      perfilSalvando = false;
+      mostrarPerfil();
+      break;
+    case 'ditado':
+      if (perfilDitando !== null) {
+        if (ev.texto) {
+          perfilRespostas[perfilDitando] = ev.texto;
+          if (etapasPerfil[perfilEtapa][0] === perfilDitando) $('perfil-resposta').value = ev.texto;
+        }
+        perfilDitando = null;
+        $('perfil-aviso').textContent = ev.erro || (ev.texto ? 'Ditado recebido. Confira o texto.' : 'Nenhuma fala reconhecida.');
+        mostrarPerfilBotoes();
+      }
+      break;
     case 'bugs': mostrarProblemas(ev.lista); break;
     case 'microfone':
       $('modo-microfone').value = ev.modo;
@@ -511,3 +538,87 @@ $('btn-celular').onclick = () => {
   $('ponte-estado').textContent = ponteAtiva ? 'Desligando…' : 'Conectando…';
   window.secretario.enviar({ cmd: 'ponte', valor: !ponteAtiva });
 };
+
+
+// A apresentação usa somente valores explícitos do cofre; pular mantém o valor salvo.
+const etapasPerfil = [
+  ['nome', 'Como prefere ser chamado?'], ['ocupacao', 'O que você faz?'],
+  ['cidade', 'Em qual cidade você mora? Informe somente a cidade.'],
+  ['rotina', 'Em quais horários você mais precisa de ajuda?'],
+  ['tarefas', 'Quais tarefas repetitivas quer delegar?'],
+  ['interesses_livres', 'Quais são seus assuntos de interesse?'],
+  ['estilo', 'Como prefere as respostas?', ['Curtas e diretas; informal', 'Curtas e diretas; formal', 'Detalhadas; informal', 'Detalhadas; formal']],
+  ['nunca', 'O que nunca devo fazer sem perguntar?'],
+];
+let perfilRespostas = {}, perfilAssuntos = [], perfilEtapa = 0;
+let perfilEditando = false, perfilRefazer = false, perfilSalvando = false, perfilDitando = null;
+function abrirPerfil() {
+  perfilEtapa = 0;
+  perfilEditando = true;
+  perfilRefazer = false;
+  perfilSalvando = false;
+  if (!$('apresentacao').open) $('apresentacao').showModal();
+  mostrarPerfil();
+}
+function mostrarPerfilBotoes() {
+  for (const id of ['perfil-voltar', 'perfil-pular', 'perfil-proximo', 'perfil-ditar']) {
+    $(id).disabled = perfilSalvando || perfilDitando !== null || (id === 'perfil-voltar' && perfilEtapa === 0);
+  }
+}
+function mostrarPerfil() {
+  const [chave, pergunta, opcoes] = etapasPerfil[perfilEtapa];
+  $('perfil-pergunta').textContent = pergunta;
+  $('perfil-progresso').value = perfilEtapa + 1;
+  $('perfil-resposta').value = perfilRespostas[chave] || '';
+  $('perfil-opcoes').replaceChildren();
+  const escolhas = perfilEtapa === 5 ? perfilAssuntos : opcoes || [];
+  for (const valor of escolhas) {
+    const label = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = perfilEtapa === 5 ? 'checkbox' : 'radio';
+    input.name = 'perfil-escolha';
+    input.checked = perfilEtapa === 5 ? (perfilRespostas.interesses || []).includes(valor) : perfilRespostas[chave] === valor;
+    input.onchange = () => {
+      if (perfilEtapa === 5) {
+        const selecionados = new Set(perfilRespostas.interesses || []);
+        input.checked ? selecionados.add(valor) : selecionados.delete(valor);
+        perfilRespostas.interesses = [...selecionados];
+      } else $('perfil-resposta').value = valor;
+    };
+    label.append(input, document.createTextNode(valor));
+    $('perfil-opcoes').append(label);
+  }
+  $('perfil-proximo').textContent = perfilEtapa === 7 ? 'Concluir' : 'Próximo';
+  mostrarPerfilBotoes();
+  $('perfil-resposta').focus();
+}
+function moverPerfil(direcao, pular = false) {
+  if (perfilSalvando || perfilDitando !== null) return;
+  if (!pular) perfilRespostas[etapasPerfil[perfilEtapa][0]] = $('perfil-resposta').value.trim();
+  if (perfilEtapa === 7 && direcao > 0) {
+    perfilSalvando = true;
+    mostrarPerfilBotoes();
+    window.secretario.enviar({ cmd: 'perfil_inicial', respostas: perfilRespostas });
+    return;
+  }
+  perfilEtapa += direcao;
+  // Cidade ausente é opcional e não gera nova pergunta.
+  if (perfilEtapa === 2 && !perfilRespostas.cidade) perfilEtapa += direcao;
+  $('perfil-aviso').textContent = '';
+  mostrarPerfil();
+}
+$('perfil-voltar').onclick = () => moverPerfil(-1);
+$('perfil-proximo').onclick = () => moverPerfil(1);
+$('perfil-pular').onclick = () => moverPerfil(1, true);
+$('perfil-ditar').onclick = () => {
+  perfilDitando = etapasPerfil[perfilEtapa][0];
+  $('perfil-aviso').textContent = 'Pode falar…';
+  mostrarPerfilBotoes();
+  window.secretario.enviar({ cmd: 'ditar' });
+};
+$('apresentacao').addEventListener('cancel', (e) => e.preventDefault());
+$('refazer-apresentacao').onclick = () => {
+  perfilRefazer = true;
+  window.secretario.enviar({ cmd: 'perfil_atual' });
+};
+window.secretario.enviar({ cmd: 'perfil_atual' });

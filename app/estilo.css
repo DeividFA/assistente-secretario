@@ -269,3 +269,13 @@ kbd { font: 600 11px "Segoe UI", sans-serif; padding: 1px 6px; border-radius: 5p
 #lista-problemas pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
 #lista-problemas label, #lista-problemas textarea { display: block; width: 100%; box-sizing: border-box; }
 #lista-problemas button { margin: 10px 10px 0 0; }
+
+#apresentacao { width: min(620px, 90vw); max-height: 90vh; overflow: auto; color: var(--texto, #eee); background: var(--fundo, #202328); border: 1px solid #58636b; border-radius: 16px; padding: 28px; }
+#apresentacao::backdrop { background: #000a; }
+#perfil-progresso, #perfil-resposta { width: 100%; box-sizing: border-box; }
+#perfil-resposta { background: #17191d; color: #eee; padding: 12px; border: 1px solid #657078; border-radius: 8px; }
+#perfil-opcoes { display: grid; gap: 8px; margin-bottom: 12px; }
+.perfil-acoes { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.perfil-acoes button { padding: 8px 14px; border-radius: 8px; cursor: pointer; }
+#perfil-proximo { background: #93e5c0; color: #15251e; }
+#perfil-aviso { min-height: 1.5em; }
