@@ -10,6 +10,7 @@ PADROES = {
     "velocidade_fala": 190,
     "janela_conversa": 15,
     "palavra_ativacao": "secretário",
+    "pausa_fala": 1.4,
 }
 
 

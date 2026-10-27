@@ -23,13 +23,15 @@ def correcoes(tmp_path, monkeypatch):
 def test_correcoes_iniciais_e_fronteiras(correcoes):
     assert vocabulario.corrigir("DAVID usa CLOUD e gloco de notas") == "Deivid usa Claude e bloco de notas"
     assert vocabulario.corrigir("Davidson cloudflare") == "Davidson cloudflare"
-    assert json.loads(correcoes.read_text(encoding="utf-8"))["David"] == "Deivid"
+    # as correções padrão valem sempre, sem precisar estar gravadas no arquivo do usuário
+    assert json.loads(correcoes.read_text(encoding="utf-8")) == {}
 
 
 def test_preserva_correcoes_existentes(correcoes):
-    correcoes.write_text('{"teste": "certo"}', encoding="utf-8")
-    assert vocabulario.corrigir("David teste") == "David certo"
-    assert json.loads(correcoes.read_text(encoding="utf-8")) == {"teste": "certo"}
+    correcoes.write_text('{"teste": "certo", "David": "David"}', encoding="utf-8")
+    # as do usuário somam-se às padrão e têm prioridade sobre elas
+    assert vocabulario.corrigir("David teste linketim") == "David certo LinkedIn"
+    assert json.loads(correcoes.read_text(encoding="utf-8")) == {"teste": "certo", "David": "David"}
 
 
 def test_aprender_correcao_normaliza_sem_duplicar(correcoes):

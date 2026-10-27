@@ -8,7 +8,17 @@ from pathlib import Path
 
 COFRE = Path.home() / "Documents" / "Secretario"
 CORRECOES = Path(__file__).resolve().parent / "correcoes.json"
-FIXOS = ["Deivid", "Secretário", "Claude", "Gemma", "Codex", "Gemini", "Grok", "Obsidian"]
+FIXOS = ["Deivid", "Secretário", "Claude", "Gemma", "Codex", "Gemini", "Grok", "Obsidian",
+         "LinkedIn", "Ollama", "ChatGPT", "GitHub", "WhatsApp", "YouTube", "Instagram"]
+# Erros observados no log de voz do Deivid (2026-10-26). O arquivo correcoes.json do
+# usuário tem prioridade sobre estes pares.
+CORRECOES_PADRAO = {
+    "David": "Deivid", "gloco de notas": "bloco de notas", "cloud": "Claude",
+    "codecs": "Codex", "gemão": "Gemma", "gem agora": "Gemma agora",
+    "linketim": "LinkedIn", "link-ait": "LinkedIn", "linkedim": "LinkedIn",
+    "link edin": "LinkedIn", "linkedin": "LinkedIn", "link é de mesmo": "LinkedIn",
+    "abre o meu link": "abre o meu LinkedIn", "abra o meu link": "abra o meu LinkedIn",
+}
 _trava = threading.RLock()
 
 
@@ -47,12 +57,11 @@ def termos(cofre=COFRE, limite=60):
 def _ler_correcoes():
     try:
         with CORRECOES.open("x", encoding="utf-8") as arquivo:
-            json.dump({"gloco de notas": "bloco de notas", "cloud": "Claude",
-                       "David": "Deivid"}, arquivo, ensure_ascii=False, indent=2)
+            json.dump({}, arquivo)
     except FileExistsError:
         pass
     dados = json.loads(CORRECOES.read_text(encoding="utf-8"))
-    return dados if isinstance(dados, dict) else {}
+    return {**CORRECOES_PADRAO, **(dados if isinstance(dados, dict) else {})}
 
 
 def corrigir(texto):

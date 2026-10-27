@@ -76,7 +76,7 @@ class Microfone:
         ruido = float(np.median([rms(b) for b in blocos]))
         return max(0.01, ruido * 3.5)
 
-    def gravar_fala(self, espera_max=None, duracao_max=30.0, pausa=0.9):
+    def gravar_fala(self, espera_max=None, duracao_max=30.0, pausa=None):
         """Espera alguém falar e devolve o áudio até uma pausa. None se ninguém falou
         dentro de espera_max segundos."""
         antes = deque(maxlen=10)  # guarda 300 ms antes do início da fala
@@ -85,6 +85,8 @@ class Microfone:
         audio = []
         blocos_voz = 0
         blocos_silencio = 0
+        # 0,9 s cortava frases em que o Deivid pausa para pensar ("abra o meu... LinkedIn")
+        pausa = pausa if pausa is not None else float(config.carregar().get("pausa_fala", 1.4))
         limite_silencio = int(pausa * TAXA / BLOCO)
         while True:
             try:
