@@ -120,6 +120,20 @@ class ClientePc(private val receber: (EventoPc) -> Unit, private val estadoConex
                 .toString().toRequestBody(tipoJson)).build())
     }
 
+    suspend fun perfilEstilo(): String {
+        val pc = atual ?: error("PC desconectado")
+        val resposta = cliente.executar(Request.Builder().url("http://$host:${pc.porta}/memoria/perfil-estilo")
+            .header("Authorization", "Bearer ${pc.token}").build())
+        return Json.parseToJsonElement(resposta).jsonObject.getValue("resumo").jsonPrimitive.content
+    }
+
+    suspend fun registrarPostagem(item: JsonElement) {
+        val pc = atual ?: error("PC desconectado")
+        cliente.executar(Request.Builder().url("http://$host:${pc.porta}/postagens")
+            .header("Authorization", "Bearer ${pc.token}")
+            .post(item.toString().toRequestBody(tipoJson)).build())
+    }
+
     suspend fun enviarLembrete(item: JsonObject) {
         val pc = atual ?: error("PC desconectado")
         cliente.executar(Request.Builder().url("http://$host:${pc.porta}/lembretes")

@@ -263,3 +263,31 @@ compilar e validar em aparelho câmera, permissão de notificações, seleção 
 apps, recusa de confirmação, migração v1→v2, sincronização offline/reenvio,
 CSV com vírgula decimal, correção de categoria e aviso de orçamento.
 Gradle e pytest não foram executados pelo Codex.
+
+### C6 — Postagens
+
+Peça “Cria uma postagem sobre Kotlin para o LinkedIn” (ou Instagram). O PC
+gera o rascunho pela fila existente; sem PC, a nuvem gera sem ferramentas de
+ação. O resumo de Perfil/ e Preferências/ vem de GET /memoria/perfil-estilo,
+autenticado, limitado a 1600 caracteres e filtrado no PC. O último resumo
+fica nas preferências criptografadas do celular para uso sem PC.
+
+Edite o rascunho (até 2000 caracteres, limite atual da Acessibilidade), escolha
+uma imagem na galeria e confira a prévia. “Aprovar e abrir no app” compartilha
+pela C3. Escolha a rede indicada no seletor em até 60 segundos. A C4 preenche
+o campo e procura Avançar/Seguinte/Publicar, confirmando as ações no overlay.
+No botão final pergunta exatamente “Posso publicar?”: somente “Sim” permite
+o clique. Parar, recusar, tempo esgotado ou mudança de tela interrompem o fluxo.
+Exige Android 14+ e Acessibilidade habilitada, como a C4.
+
+Depois do clique, volte ao Secretário e confirme se a postagem apareceu na
+rede. Só então um recibo persistente entra na fila para POST /postagens
+(`id`, `rede`, `texto`). O PC acrescenta uma linha em Histórico/Postagens.md;
+reenvios do mesmo id não duplicam a linha. A sincronização ocorre com o app
+aberto. A imagem não é enviada ao cofre. Telas sem os controles reconhecidos
+interrompem a preparação; não há tentativa de adivinhar coordenadas.
+
+Revisor: executar voz/tests/test_postagens.py, os testes existentes de
+memória/ponte e PostagensTest (JVM). Validar no aparelho edição, prévia da
+galeria, PC ausente com cache, recusa/Parar antes de publicar, mudança de
+tela, publicação confirmada e reenvio do histórico sem duplicação.

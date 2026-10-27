@@ -121,6 +121,7 @@ private fun Tela(modelo: ConversaModelo, ouvir: () -> Unit) {
         } else if (configuracoes) {
             Configuracoes(modelo, fatos, Modifier.weight(1f))
         } else {
+            TelaPostagem(modelo)
             LazyColumn(state = rolagem, modifier = Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(mensagens, key = { it.id }) { mensagem ->
                     Card(Modifier.fillMaxWidth()) {

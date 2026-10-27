@@ -38,7 +38,7 @@ data class Pareamento(val hostLan: String?, val hostTailscale: String?, val port
 
 data class TarefaPc(val id: Long, val comando: String, val status: String)
 sealed interface EventoPc {
-    data class Mensagem(val autor: String, val texto: String) : EventoPc
+    data class Mensagem(val autor: String, val texto: String, val tarefa: Long? = null) : EventoPc
     data class Estado(val estado: String) : EventoPc
     data class Fila(val tarefas: List<TarefaPc>) : EventoPc
     data class Outro(val nome: String) : EventoPc
@@ -51,7 +51,7 @@ object Protocolo {
             require(it.isString); it.content
         }
         return when (val nome = campo("evento")) {
-            "mensagem" -> EventoPc.Mensagem(campo("autor"), campo("texto"))
+            "mensagem" -> EventoPc.Mensagem(campo("autor"), campo("texto"), o["tarefa"]?.jsonPrimitive?.longOrNull)
             "estado" -> EventoPc.Estado(campo("estado"))
             "fila" -> EventoPc.Fila(o.getValue("tarefas").jsonArray.map { item ->
                 val t = item.jsonObject

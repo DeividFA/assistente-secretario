@@ -170,6 +170,8 @@ class Ponte:
         app.router.add_post('/comando', self.receber_comando)
         app.router.add_post('/memoria/fatos', self.fatos)
         app.router.add_get('/memoria/contexto', self.contexto)
+        app.router.add_get('/memoria/perfil-estilo', self.perfil_estilo)
+        app.router.add_post('/postagens', self.receber_postagem)
         app.router.add_post('/bugs', self.bug)
         app.router.add_get('/lembretes', self.listar_lembretes)
         app.router.add_post('/lembretes', self.criar_lembrete)
@@ -210,6 +212,21 @@ class Ponte:
     async def contexto(self, request):
         texto = await asyncio.to_thread(memoria.contexto, request.query.get('q', '')[:10000])
         return web.json_response(dict(contexto=texto))
+
+    async def perfil_estilo(self, request):
+        resumo = await asyncio.to_thread(memoria.perfil_estilo)
+        return web.json_response(dict(resumo=resumo))
+
+    async def receber_postagem(self, request):
+        dados = await request.json()
+        if not isinstance(dados, dict) or set(dados) != {'id', 'rede', 'texto'}:
+            raise web.HTTPBadRequest()
+        # Serializa recibos repetidos para manter a escrita idempotente.
+        def guardar():
+            with self.trava:
+                return memoria.registrar_postagem(dados['id'], dados['rede'], dados['texto'])
+        nota = await asyncio.to_thread(guardar)
+        return web.json_response(dict(nota=nota), status=201)
 
     async def bug(self, request):
         dados = await request.json()

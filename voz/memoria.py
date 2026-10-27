@@ -16,6 +16,65 @@ STOPWORDS = set("para como onde quando porque sobre entre esta este isso esse es
                 "deles delas nosso nossa nossos nossas qual quais sera tambem fala".split())
 
 
+def perfil_estilo(cofre=COFRE):
+    """Resumo limitado, descartando linhas com identificadores ou localização pessoal."""
+    linhas = []
+    sensivel = re.compile(
+        r"cpf|\brg\b|endere[çc]o|telefone|celular|whatsapp|contato|cep|"
+        r"\brua\b|avenida|travessa|rodovia|bairro|alameda|lote|quadra|apartamento|resid[eê]ncia|moro|mora|"
+        # Documentos, filiação e nascimento, mesmo sem números (ex.: "Nome da mãe: Fulana").
+        r"\bm[aã]e\b|\bpai\b|filia[çc][aã]o|nascimento|naturalidade|documento|\bcnh\b|passaporte|"
+        r"\bpis\b|\bnis\b|eleitor|reservista|senha|"
+        r"\d|@|https?://", re.IGNORECASE)
+    for pasta in ('Perfil', 'Preferências'):
+        for caminho in sorted((Path(cofre) / pasta).glob('*.md')):
+            if caminho.is_symlink() or not caminho.resolve().is_relative_to(Path(cofre).resolve()):
+                continue
+            if caminho.stem.lower() in ('documentos', 'dados pessoais'):
+                continue  # só o nome sai de Dados pessoais (abaixo); o resto nunca vai ao celular
+            texto = caminho.read_text(encoding='utf-8')
+            texto = re.sub(r'\A---\s*\n.*?\n---\s*\n', '', texto, flags=re.S)
+            for linha in texto.splitlines():
+                # Datas de aprendizado não são parte do conteúdo pessoal.
+                linha = re.sub(r'^\s*-?\s*\d{4}-\d{2}-\d{2}\s*[—–:]\s*', '', linha)
+                vazio = re.fullmatch(r'[^:]{1,40}:\s*', linha.strip(' -\t*'))  # campo sem valor
+                if (linha.strip() and not linha.lstrip().startswith(('#', '>')) and not vazio
+                        and not sensivel.search(linha)):
+                    linhas.append(linha.strip(' -\t')[:240])
+    nome = _campo(Path(cofre) / 'Perfil' / 'Dados pessoais.md', 'Como prefere ser chamado')
+    if nome and not sensivel.search(nome):
+        linhas.insert(0, f'Como prefere ser chamado: {nome}')
+    return '\n'.join(linhas)[:1600]
+
+
+def _campo(caminho, rotulo):
+    try:
+        texto = caminho.read_text(encoding='utf-8')
+    except OSError:
+        return ''
+    achado = re.search(r'^\W*' + re.escape(rotulo) + r'\W*:\s*\**\s*(.+)$', texto, re.M | re.I)
+    return achado.group(1).strip(' *') if achado else ''
+
+
+def registrar_postagem(id, rede, texto, cofre=COFRE, agora=None):
+    """Recibo idempotente: repetir a sincronização não duplica a postagem."""
+    if not isinstance(id, str) or not re.fullmatch(r'[a-zA-Z0-9-]{1,80}', id):
+        raise ValueError('Identificador inválido')
+    if rede not in ('LinkedIn', 'Instagram') or not isinstance(texto, str) or not texto.strip() or len(texto) > 6000:
+        raise ValueError('Postagem inválida')
+    caminho = Path(cofre) / 'Histórico' / 'Postagens.md'
+    caminho.parent.mkdir(parents=True, exist_ok=True)
+    anterior = caminho.read_text(encoding='utf-8') if caminho.exists() else '# Postagens\n\n'
+    marcador = f'<!-- postagem:{id} -->'
+    if marcador not in anterior:
+        conteudo = ' '.join(texto.split()).replace('<', '&lt;').replace('>', '&gt;')
+        with caminho.open('a' if caminho.exists() else 'w', encoding='utf-8') as arquivo:
+            if not caminho.stat().st_size:
+                arquivo.write('# Postagens\n\n')
+            arquivo.write(f'- {(agora or datetime.now()).isoformat(timespec="seconds")} — {rede}: {conteudo} {marcador}\n')
+    return 'Histórico/Postagens.md'
+
+
 def normalizar(texto):
     from comum import normalizar as normalizar_comum
     return " ".join(normalizar_comum(texto).split())

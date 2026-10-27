@@ -24,6 +24,10 @@ class Configuracao(contexto: Context) {
     fun pareamento(): Pareamento? = preferencias.getString("pc", null)?.let(Pareamento::ler)
     fun parear(pc: Pareamento) { preferencias.edit().putString("pc", pc.json()).apply() }
     fun removerPc() { preferencias.edit().remove("pc").apply() }
+    fun perfilEstilo(): String = preferencias.getString("perfil_estilo", "").orEmpty()
+    fun guardarPerfilEstilo(resumo: String) { preferencias.edit().putString("perfil_estilo", resumo.take(1600)).apply() }
+    fun postagensPendentes(): String = preferencias.getString("postagens", "[]")!!
+    fun guardarPostagens(texto: String) { preferencias.edit().putString("postagens", texto).commit() }
     fun nuvem(): ConfigNuvem {
         val provedor = Provedor.entries.firstOrNull { it.name == preferencias.getString("provedor", "GPT") } ?: Provedor.GPT
         return ConfigNuvem(provedor, preferencias.getString("base", provedor.base)!!,

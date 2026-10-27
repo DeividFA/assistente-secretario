@@ -26,12 +26,21 @@ class ConversaModelo(aplicacao: Application) : AndroidViewModel(aplicacao) {
     val listaGastos = banco.gastos().observar().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val rascunhoGasto = MutableStateFlow<RascunhoGasto?>(null)
     val resumoGastos = MutableStateFlow("")
+    val postagem = MutableStateFlow<RascunhoPostagem?>(null)
+    private var tarefasPostagem = emptyList<Long>()
+    private val respostasPostagem = mutableMapOf<Long, String>()
+    private var esperandoPostagem = false
+    private var compartilhada: RascunhoPostagem? = null
     private val iaGastos = ClienteNuvem(configuracao::nuvem, RegistroAcoes(emptyList()))
     private val lembretes = LembretesCelular(aplicacao)
     private val pc = ClientePc({ evento ->
         viewModelScope.launch {
             when (evento) {
                 is EventoPc.Mensagem -> {
+                    if (esperandoPostagem && evento.tarefa != null && evento.autor.lowercase() in listOf("secretário", "secretario", "assistente")) {
+                        respostasPostagem[evento.tarefa] = evento.texto
+                        receberRascunho()
+                    }
                     dados.inserir(MensagemLocal(autor = evento.autor, texto = evento.texto, origem = "PC"))
                     if (evento.autor.lowercase() !in listOf("você", "voce", "usuario", "usuário", "deivid", "sistema"))
                         falar.emit(evento.texto)
@@ -54,6 +63,8 @@ class ConversaModelo(aplicacao: Application) : AndroidViewModel(aplicacao) {
                 try {
                     val pareamento = configuracao.pareamento()
                     if (pareamento != null && withTimeoutOrNull(1500) { pc.conectar(pareamento) } == true) {
+                        configuracao.guardarPerfilEstilo(pc.perfilEstilo())
+                        sincronizarPostagens()
                         lembretes.sincronizar(pc)
                         gastos.sincronizar(pc)
                         val pendentes = dados.fatos()
@@ -89,6 +100,7 @@ class ConversaModelo(aplicacao: Application) : AndroidViewModel(aplicacao) {
 
     fun enviar(texto: String) {
         if (enviando.value || texto.isBlank()) return
+        Postagens.rede(texto)?.let { prepararPostagem(texto, it); return }
         if (Regex("^(gastei|paguei)\\b", RegexOption.IGNORE_CASE).containsMatchIn(texto.trim())) {
             prepararGasto(texto); return
         }
@@ -119,6 +131,97 @@ class ConversaModelo(aplicacao: Application) : AndroidViewModel(aplicacao) {
     }
 
     override fun onCleared() { parar(); banco.close() }
+
+    private fun receberRascunho() {
+        tarefasPostagem.firstNotNullOfOrNull { respostasPostagem[it] }?.let { texto ->
+            postagem.value = postagem.value?.copy(texto = texto.take(2000))
+            esperandoPostagem = false; tarefasPostagem = emptyList(); respostasPostagem.clear()
+        }
+    }
+
+    private fun prepararPostagem(texto: String, rede: String) = viewModelScope.launch {
+        enviando.value = true
+        esperandoPostagem = true; respostasPostagem.clear(); tarefasPostagem = emptyList()
+        postagem.value = RascunhoPostagem(rede)
+        compartilhada = null
+        try {
+            val pareamento = configuracao.pareamento()
+            val conectado = pareamento != null && withTimeoutOrNull(1500) {
+                try { pc.conectar(pareamento) } catch (e: CancellationException) { throw e } catch (_: Exception) { false }
+            } == true
+            if (conectado) {
+                try { configuracao.guardarPerfilEstilo(pc.perfilEstilo()) }
+                catch (e: CancellationException) { throw e } catch (_: Exception) { /* Usa o último resumo. */ }
+            }
+            val pedido = Postagens.pedido(texto, rede, configuracao.perfilEstilo())
+            if (conectado) {
+                cerebro.value = "PC"
+                tarefasPostagem = pc.enviar(pedido)
+                receberRascunho()
+            } else {
+                cerebro.value = "Nuvem"
+                postagem.value = postagem.value?.copy(texto = iaGastos.responder(pedido).take(2000))
+                esperandoPostagem = false
+            }
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) { esperandoPostagem = false; aviso.value = "Rascunho não concluído: ${e.message}" }
+        finally { enviando.value = false }
+    }
+
+    fun editarPostagem(item: RascunhoPostagem) {
+        if (postagem.value?.texto != item.texto) esperandoPostagem = false
+        postagem.value = item.copy(texto = item.texto.take(2000))
+        compartilhada = null
+    }
+
+    fun compartilharPostagem() = viewModelScope.launch {
+        val item = postagem.value ?: return@launch
+        if (item.texto.isBlank() || enviando.value) return@launch
+        enviando.value = true
+        var abrirPublicacao = false
+        try {
+            val ambiente = AmbienteAcoes(getApplication(), interfaceAcoes::confirmar, interfaceAcoes::permitir, interfaceAcoes::abrir, lembretes)
+            val resultado = Compartilhar(ambiente).executar(buildJsonObject { put("texto", item.texto); put("imagem", item.imagem) })
+            if (!resultado.contains("cancelado", true)) { compartilhada = item; abrirPublicacao = true }
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) { aviso.value = "Compartilhamento falhou: ${e.message}" }
+        finally { enviando.value = false }
+        if (abrirPublicacao) publicarPostagem()
+    }
+
+    fun publicarPostagem() = viewModelScope.launch {
+        val item = postagem.value ?: return@launch
+        if (enviando.value) return@launch
+        enviando.value = true
+        try {
+            check(compartilhada == item) { "Aprove e compartilhe este rascunho primeiro" }
+            val servico = ServicoAcessibilidade.atual ?: error("Ative a Acessibilidade")
+            if (servico.publicarPostagem(item)) {
+                // Um clique aceito não prova que o servidor da rede concluiu a publicação.
+                if (interfaceAcoes.confirmar("A postagem apareceu publicada no ${item.rede}?")) {
+                    val pendentes = Json.parseToJsonElement(configuracao.postagensPendentes()).jsonArray
+                    val recibo = buildJsonObject {
+                        put("id", java.util.UUID.randomUUID().toString()); put("rede", item.rede); put("texto", item.texto)
+                    }
+                    configuracao.guardarPostagens(JsonArray(pendentes + recibo).toString())
+                    postagem.value = null; compartilhada = null
+                    try { sincronizarPostagens() } catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { aviso.value = "Publicação guardada; histórico será enviado ao PC" }
+                }
+            }
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) { aviso.value = "Publicação interrompida: ${e.message}" }
+        finally { enviando.value = false }
+    }
+
+    private suspend fun sincronizarPostagens() {
+        val itens = Json.parseToJsonElement(configuracao.postagensPendentes()).jsonArray.toList()
+        for (item in itens) {
+            pc.registrarPostagem(item)
+            val atuais = Json.parseToJsonElement(configuracao.postagensPendentes()).jsonArray
+            configuracao.guardarPostagens(JsonArray(atuais.filter { it != item }).toString())
+        }
+    }
 
     fun prepararGasto(texto: String, foto: Boolean = false) {
         viewModelScope.launch {

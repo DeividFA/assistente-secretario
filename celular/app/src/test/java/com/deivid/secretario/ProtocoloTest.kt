@@ -25,8 +25,8 @@ class ProtocoloTest {
             qr(porta = "0"), qr(porta = "65536"), qr(porta = "\"8765\""), qr(segredo = "curto"))
             .forEach { entrada -> assertTrue(entrada, runCatching { Pareamento.ler(entrada) }.isFailure) }
     }
-    @Test fun `mensagem usa autor e texto sem campos inventados`() {
-        assertEquals(EventoPc.Mensagem("Secretário", "Olá"), Protocolo.evento(
+    @Test fun `mensagem usa autor, texto e tarefa e ignora campos extras`() {
+        assertEquals(EventoPc.Mensagem("Secretário", "Olá", 15), Protocolo.evento(
             """{"evento":"mensagem","autor":"Secretário","texto":"Olá","aparelho":7,"tarefa":15}"""))
     }
     @Test fun `estado e fila seguem eventos IPC`() {

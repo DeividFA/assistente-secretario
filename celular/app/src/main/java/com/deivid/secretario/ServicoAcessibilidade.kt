@@ -99,7 +99,7 @@ class ServicoAcessibilidade : AccessibilityService() {
             setBackgroundColor(0xff243831.toInt())
             addView(TextView(this@ServicoAcessibilidade).apply { this.text = texto; setTextColor(-1) })
             if (confirmar) addView(Button(this@ServicoAcessibilidade).apply {
-                this.text = "Confirmar esta ação"
+                this.text = if (texto == "Posso publicar?") "Sim" else "Confirmar esta ação"
                 setOnClickListener { resposta?.complete(true) }
             })
             addView(Button(this@ServicoAcessibilidade).apply {
@@ -174,7 +174,7 @@ class ServicoAcessibilidade : AccessibilityService() {
     private fun resumo(no: AccessibilityNodeInfo) =
         "id=${no.viewIdResourceName.orEmpty().take(120)} texto=${no.text?.toString().orEmpty().take(250)} descrição=${no.contentDescription?.toString().orEmpty().take(150)} clicável=${no.isClickable} editável=${no.isEditable}"
 
-    suspend fun executar(acao: String, indice: Int?, texto: String, x: Float?, y: Float?): String =
+    suspend fun executar(acao: String, indice: Int?, texto: String, x: Float?, y: Float?, publicacao: Boolean = false): String =
         withContext(Dispatchers.Main.immediate) { trava.withLock {
             if (acao == "parar") { parar(); return@withLock "Automação parada." }
             if (acao == "iniciar") {
@@ -212,7 +212,12 @@ class ServicoAcessibilidade : AccessibilityService() {
                 val versao = revisao
                 val descricao = no?.let(::resumo).orEmpty()
                 // Confirma toda mutação: cobre publicar/enviar/comprar/apagar/aceitar inclusive ícones.
-                if (!confirmar("$acao: $descricao\n${texto.take(500)}\nAutorizar apenas esta ação?")) {
+                val confirmacao = ConfirmacaoPostagem()
+                val autorizado = if (publicacao || (acao in listOf("tocar", "gesto") &&
+                    Regex("publicar|compartilhar|\\bpost\\b|\\bshare\\b", RegexOption.IGNORE_CASE).containsMatchIn(descricao))) {
+                    confirmacao.aguardar { pergunta -> if (confirmar(pergunta)) "sim" else "não" }
+                } else confirmar("$acao: $descricao\n${texto.take(500)}\nAutorizar apenas esta ação?")
+                if (!autorizado) {
                     parar(); return@withLock "Ação cancelada ou pausada."
                 }
                 check(versao == revisao && janelaPermitida().id == alvo.id) { "Tela mudou durante confirmação" }
@@ -248,6 +253,41 @@ class ServicoAcessibilidade : AccessibilityService() {
                 "${if (sucesso) "Ação executada" else "Ação recusada pelo app"}; leia a tela antes do próximo passo."
             } catch (e: Exception) { parar(); throw e }
         } }
+
+    suspend fun publicarPostagem(item: RascunhoPostagem): Boolean {
+        val esperado = if (item.rede == "LinkedIn") "com.linkedin.android" else "com.instagram.android"
+        withTimeout(60000) {
+            while (pacote != esperado || windows.none { it.isActive && it.id == janela }) delay(250)
+        }
+        try {
+            var tela = executar("iniciar", null, "", null, null)
+            var preenchido = false
+            repeat(4) {
+                check(pacote == esperado) { "O app mudou; publicação interrompida" }
+                fun indice(linha: String) = linha.substringBefore(' ').toInt()
+                val linhas = tela.lines()
+                val campo = linhas.firstOrNull { it.contains("editável=true") }
+                if (!preenchido && campo != null) {
+                    check(executar("preencher", indice(campo), item.texto, null, null).startsWith("Ação executada"))
+                    preenchido = true
+                    tela = executar("ler", null, "", null, null)
+                } else {
+                    val publicar = linhas.firstOrNull { it.contains("clicável=true") &&
+                        Regex("(?:texto|descrição)=(?:Publicar|Compartilhar|Post|Share)(?= descrição=| clicável=|$)", RegexOption.IGNORE_CASE).containsMatchIn(it) }
+                    if (publicar != null) {
+                        // O texto pode ter vindo preenchido pelo intent; o usuário revisa na tela alvo.
+                        return executar("tocar", indice(publicar), "", null, null, publicacao = true).startsWith("Ação executada")
+                    }
+                    val proximo = linhas.firstOrNull { it.contains("clicável=true") &&
+                        Regex("texto=(Avançar|Seguinte|Next)(?= descrição=)", RegexOption.IGNORE_CASE).containsMatchIn(it) }
+                        ?: error("Não encontrei Publicar; revise a tela do app")
+                    check(executar("tocar", indice(proximo), "", null, null).startsWith("Ação executada"))
+                    tela = executar("ler", null, "", null, null)
+                }
+            }
+            error("Limite de preparação atingido")
+        } finally { executar("parar", null, "", null, null) }
+    }
 
     fun acrescentarBloqueio(pacote: String) {
         politica.acrescentar(pacote)
