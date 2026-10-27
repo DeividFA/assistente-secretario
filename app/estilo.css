@@ -294,3 +294,7 @@ kbd { font: 600 11px "Segoe UI", sans-serif; padding: 1px 6px; border-radius: 5p
 #config-campos input:not([type=checkbox]), #config-chaves input { flex: 1; min-width: 180px; }
 #configuracoes button { margin: 4px; }
 .msg .texto textarea { display: block; width: 100%; min-height: 80px; }
+
+/* Refazer apresentação e Calibrar voz ficam nas Configurações; no cartão de voz não cabem.
+   Os botões continuam no HTML porque as Configurações os acionam pelo id. */
+#refazer-apresentacao, #btn-calibrar { display: none; }
