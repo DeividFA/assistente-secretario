@@ -6,6 +6,7 @@ import os
 import shutil
 import urllib.error
 import urllib.request
+import uuid
 
 import keyring
 
@@ -38,6 +39,7 @@ VARIAVEIS_CHAVES = {
     "grok": "XAI_API_KEY", "gpt": "OPENAI_API_KEY", "gemini": "GEMINI_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY", "mistral": "MISTRAL_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
+    "groq": "GROQ_API_KEY",
 }
 
 
@@ -58,6 +60,46 @@ def ler_chave(nome):
     except Exception:
         valor = None
     return valor or os.environ.get(VARIAVEIS_CHAVES[nome]) or None
+
+
+def transcrever_audio(nome, audio_wav, termos, timeout=15):
+    """Envia WAV em memória para transcrição, sem expor credenciais nos erros."""
+    opcoes = {
+        "groq": ("https://api.groq.com/openai/v1/audio/transcriptions",
+                 "whisper-large-v3-turbo", "groq"),
+        "openai": ("https://api.openai.com/v1/audio/transcriptions",
+                   "gpt-4o-transcribe", "gpt"),
+    }
+    if nome not in opcoes:
+        raise ValueError("Provedor de transcrição desconhecido.")
+    url, modelo, credencial = opcoes[nome]
+    chave = ler_chave(credencial)
+    if not chave:
+        raise RuntimeError("Chave não configurada.")
+    try:
+        fronteira = uuid.uuid4().hex
+        partes = []
+        for campo, valor in (("model", modelo), ("language", "pt"),
+                             ("prompt", ", ".join(termos))):
+            partes.append((f'--{fronteira}\r\n'
+                           f'Content-Disposition: form-data; name="{campo}"\r\n\r\n'
+                           f'{valor}\r\n').encode("utf-8"))
+        partes.append((f'--{fronteira}\r\n'
+                       'Content-Disposition: form-data; name="file"; filename="audio.wav"\r\n'
+                       'Content-Type: audio/wav\r\n\r\n').encode("utf-8"))
+        partes.extend((audio_wav, f"\r\n--{fronteira}--\r\n".encode("ascii")))
+        pedido = urllib.request.Request(url, data=b"".join(partes), headers={
+            "Authorization": "Bearer " + chave,
+            "Content-Type": "multipart/form-data; boundary=" + fronteira,
+        }, method="POST")
+        with urllib.request.urlopen(pedido, timeout=timeout) as resposta:
+            resultado = json_modulo.loads(resposta.read().decode("utf-8"))
+        texto = resultado["text"]
+        if not isinstance(texto, str):
+            raise ValueError()
+        return texto.strip()
+    except Exception:
+        raise RuntimeError("Falha ao transcrever áudio na nuvem.") from None
 
 
 def disponivel(nome):

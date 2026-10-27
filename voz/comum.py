@@ -1,6 +1,7 @@
 """Peças compartilhadas pelo servidor MCP e pelo assistente de voz:
-microfone com detecção de fala, transcrição local (Whisper) e fala (voz do Windows)."""
+microfone com detecção de fala, transcrição e fala (voz do Windows)."""
 
+import io
 import os
 import queue
 import re
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import time
 import unicodedata
+import wave
 from collections import deque
 from pathlib import Path
 
@@ -125,23 +127,41 @@ _termos_ate = 0
 
 
 def transcrever(audio):
-    """Transcreve áudio 16 kHz mono (float32) em português, localmente."""
+    """Transcreve áudio 16 kHz mono (float32), com fallback para Whisper local."""
     global _modelo, _termos, _termos_ate
-    if _modelo is None:
-        from faster_whisper import WhisperModel
-        nome = os.environ.get("SECRETARIO_WHISPER", config.carregar()["modelo_whisper"])
-        _modelo = WhisperModel(nome, device="cpu", compute_type="int8")
+    configuracao = config.carregar()
     agora = time.monotonic()
     if _termos is None or agora >= _termos_ate:
         _termos = vocabulario.termos()
         _termos_ate = agora + 300
-    segmentos, _ = _modelo.transcribe(
-        audio, language="pt", beam_size=1, condition_on_previous_text=False,
-        hotwords=" ".join(_termos),
-        initial_prompt="Vocabulário: " + ", ".join(_termos[:15]) + ".",
-        vad_filter=True, vad_parameters={"min_silence_duration_ms": 500},
-    )
-    texto = " ".join(s.text.strip() for s in segmentos).strip()
+    texto = None
+    provedor = configuracao.get("transcricao", "local")
+    if provedor in ("groq", "openai"):
+        try:
+            import provedores
+            with io.BytesIO() as memoria:
+                with wave.open(memoria, "wb") as wav:
+                    wav.setnchannels(1)
+                    wav.setsampwidth(2)
+                    wav.setframerate(TAXA)
+                    amostras = (np.clip(audio, -1, 1) * 32767).astype("<i2")
+                    wav.writeframes(amostras.tobytes())
+                texto = provedores.transcrever_audio(provedor, memoria.getvalue(), _termos)
+        except Exception:
+            # Sem chave, rede ou resposta válida: usa o áudio original localmente.
+            texto = None
+    if texto is None:
+        if _modelo is None:
+            from faster_whisper import WhisperModel
+            nome = os.environ.get("SECRETARIO_WHISPER", configuracao["modelo_whisper"])
+            _modelo = WhisperModel(nome, device="cpu", compute_type="int8")
+        segmentos, _ = _modelo.transcribe(
+            audio, language="pt", beam_size=1, condition_on_previous_text=False,
+            hotwords=" ".join(_termos),
+            initial_prompt="Vocabulário: " + ", ".join(_termos[:15]) + ".",
+            vad_filter=True, vad_parameters={"min_silence_duration_ms": 500},
+        )
+        texto = " ".join(s.text.strip() for s in segmentos).strip()
     if normalizar(texto) in {normalizar(a) for a in ALUCINACOES}:
         return ""
     return vocabulario.corrigir(texto)
