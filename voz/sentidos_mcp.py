@@ -2,9 +2,11 @@
 controle de mouse/teclado no Windows."""
 
 import ctypes
+import json
 import os
 import time
 from datetime import datetime
+from pathlib import Path
 
 # Coordenadas em pixels físicos, iguais para a captura de tela e para o mouse.
 try:
@@ -27,10 +29,37 @@ pyautogui.PAUSE = 0.15
 
 mcp = FastMCP("sentidos")
 _escala = {"fator": 1.0, "x0": 0, "y0": 0}
+LEMBRETES = Path(__file__).resolve().parent / "lembretes.json"
 
 
 def _arquivo(prefixo):
     return CAPTURAS / f"{prefixo}_{datetime.now():%Y%m%d_%H%M%S}.jpg"
+
+
+@mcp.tool()
+def listar_lembretes() -> list[dict]:
+    """Lista os lembretes agendados, incluindo os já feitos."""
+    try:
+        return json.loads(LEMBRETES.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+
+
+@mcp.tool()
+def lembrete(quando: str, texto: str) -> str:
+    """Agenda um lembrete no horário local, em ISO AAAA-MM-DDTHH:MM."""
+    try:
+        data = datetime.strptime(quando, "%Y-%m-%dT%H:%M")
+    except ValueError:
+        return "Data inválida. Use AAAA-MM-DDTHH:MM."
+    if data.isoformat(timespec="minutes") != quando:
+        return "Data inválida. Use AAAA-MM-DDTHH:MM."
+    lembretes = listar_lembretes()
+    lembretes.append({"quando": quando, "texto": texto, "feito": False})
+    temporario = LEMBRETES.with_suffix(".json.tmp")
+    temporario.write_text(json.dumps(lembretes, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporario.replace(LEMBRETES)
+    return f"Lembrete agendado para {quando}."
 
 
 @mcp.tool()

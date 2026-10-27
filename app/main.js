@@ -3,12 +3,14 @@
 
 const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, Notification, nativeImage, shell } = require('electron');
 const { spawn } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 
 const VOZ = path.join(__dirname, '..', 'voz');
 const PYTHON = path.join(VOZ, '.venv', 'Scripts', 'python.exe');
 const ICONES = path.join(__dirname, 'icones');
+const LEMBRETES = path.join(VOZ, 'lembretes.json');
 
 let janela = null;
 let bandeja = null;
@@ -75,6 +77,25 @@ function alternarMudo(valor) {
   atualizarBandeja();
 }
 
+function verificarLembretes() {
+  try {
+    const lembretes = JSON.parse(fs.readFileSync(LEMBRETES, 'utf8'));
+    const agora = Date.now();
+    let alterado = false;
+    for (const lembrete of lembretes) {
+      if (lembrete.feito !== false || !(new Date(lembrete.quando).getTime() <= agora)) continue;
+      const n = new Notification({ title: 'Secretário — Lembrete', body: lembrete.texto, icon: path.join(ICONES, 'app.png') });
+      n.on('click', mostrar);
+      n.show();
+      lembrete.feito = true;
+      alterado = true;
+    }
+    if (alterado) fs.writeFileSync(LEMBRETES, JSON.stringify(lembretes, null, 2), 'utf8');
+  } catch (erro) {
+    if (erro.code !== 'ENOENT') console.error('Não foi possível verificar os lembretes:', erro);
+  }
+}
+
 function iniciarMotor() {
   motor = spawn(PYTHON, ['assistente_voz.py', '--ipc'], {
     cwd: VOZ, windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1' },
@@ -116,6 +137,7 @@ app.whenReady().then(() => {
   bandeja.on('click', mostrar);
   atualizarBandeja();
   iniciarMotor();
+  setInterval(verificarLembretes, 30000);
 
   // Ctrl+Shift+Espaço: falar sem dizer "secretário". Ctrl+Shift+S: abre/esconde a janela.
   globalShortcut.register('Control+Shift+Space', () => {
