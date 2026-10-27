@@ -410,6 +410,10 @@ $('btn-configuracoes').onclick = () => {
   window.secretario.enviar({ cmd: 'configuracoes' });
 };
 $('fechar-configuracoes').onclick = () => $('configuracoes').close();
+const verificarInstalacao = document.createElement('button');
+verificarInstalacao.textContent = 'Verificar instalação';
+verificarInstalacao.onclick = () => window.secretario.enviar({ cmd: 'verificar-instalacao' });
+$('configuracoes').append(verificarInstalacao);
 $('configuracoes-calibrar').onclick = () => { $('configuracoes').close(); abrirCalibracao(); };
 $('calibrar-fechar').onclick = () => $('calibrar-voz').close();
 $('calibrar-voz').addEventListener('close', () => {

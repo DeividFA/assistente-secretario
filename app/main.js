@@ -1,7 +1,7 @@
 // Processo principal: janela estilo Discord, ícone na bandeja, início com o Windows,
 // atalhos globais e o motor de voz (Python) rodando escondido em segundo plano.
 
-const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, Notification, nativeImage, shell } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, globalShortcut, Notification, nativeImage, shell, dialog } = require('electron');
 const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -255,7 +255,40 @@ function iniciarMotor() {
   });
 }
 
+let verificandoInstalacao = false;
+function verificarInstalacao(manual) {
+  if (verificandoInstalacao) return;
+  verificandoInstalacao = true;
+  execFile(PYTHON, [path.join(VOZ, 'diagnostico.py'), '--instalacao', '--json'],
+    { cwd: REPO, windowsHide: true, timeout: 30000 }, async (erro, stdout) => {
+      verificandoInstalacao = false;
+      let faltas;
+      try { faltas = JSON.parse(stdout).filter((l) => l.estado !== 'ok' && !l.opcional); }
+      catch { faltas = [{ passo: 'Diagnóstico indisponível: confira o Python do venv.' }]; }
+      if (!manual && !faltas.length) return;
+      const escolha = await dialog.showMessageBox(janela, {
+        type: faltas.length ? 'warning' : 'info', title: 'Verificar instalação',
+        message: faltas.length ? 'Há passos pendentes na instalação.' : 'Instalação verificada.',
+        detail: faltas.map((l) => l.passo).join('\n'),
+        buttons: faltas.length ? ['Fechar', 'Executar instalador…'] : ['Fechar'], cancelId: 0,
+      });
+      if (escolha.response !== 1) return;
+      const confirmar = await dialog.showMessageBox(janela, {
+        type: 'question', message: 'Instalar os componentes que faltam?',
+        detail: 'O instalador pode baixar programas e solicitar permissões do Windows.',
+        buttons: ['Cancelar', 'Instalar'], defaultId: 0, cancelId: 0,
+      });
+      if (confirmar.response === 1) {
+        const processo = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass',
+          '-File', path.join(REPO, 'instalacao', 'instalar.ps1')], { cwd: REPO, windowsHide: true });
+        processo.on('error', (e) => dialog.showErrorBox('Instalação', e.message));
+        processo.on('close', () => verificarInstalacao(true));
+      }
+    });
+}
+
 ipcMain.on('cmd', (_e, cmd) => {
+  if (cmd.cmd === 'verificar-instalacao') return verificarInstalacao(true);
   if (cmd.cmd === 'mudo') return alternarMudo(cmd.valor);
   if (cmd.cmd === 'obsidian') return abrirObsidian();
   if (cmd.cmd === 'ponte' && (!motor || !motor.stdin.writable)) {
@@ -271,6 +304,7 @@ ipcMain.handle('estado', () => ({ estado: estadoAtual, mudo, motores, vozes, pon
 app.whenReady().then(() => {
   app.setAppUserModelId('Secretario.Deivid');
   criarJanela();
+  janela.webContents.once('did-finish-load', () => verificarInstalacao(false));
   bandeja = new Tray(nativeImage.createFromPath(path.join(ICONES, 'app.png')).resize({ width: 16, height: 16 }));
   bandeja.on('click', mostrar);
   atualizarBandeja();

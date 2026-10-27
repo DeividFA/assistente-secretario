@@ -315,7 +315,7 @@ def rolar(quantidade: int) -> str:
 
 @mcp.tool()
 def abrir(alvo: str) -> str:
-    """Abre um programa, arquivo, pasta ou URL, ex.: "notepad", "calc", "C:\\Users\\deivi\\Documents",
+    """Abre um programa, arquivo, pasta ou URL, ex.: "notepad", "calc", a pasta Documents do usuário,
     "https://gov.br"."""
     os.startfile(alvo)
     return f"abrindo {alvo}"
