@@ -1,9 +1,11 @@
 """Extração de conhecimento das conversas com o Gemma local."""
 
 import json
+import re
 import urllib.request
 
 import memoria
+from comum import normalizar
 
 
 def _chamar(mensagens):
@@ -35,8 +37,25 @@ def _lista(valor, limite=20):
     return itens
 
 
+# O Gemma 4B ignora o exemplo e registra ações como "fatos"; regras fixas resolvem e
+# ainda poupam a chamada ao modelo em comandos curtos.
+VERBOS_ACAO = ("abre", "abrir", "abra", "fecha", "fechar", "feche", "liga", "desliga", "toca",
+               "pesquisa", "pesquise", "procura", "procure", "clica", "clique", "digita",
+               "digite", "mostra", "mostre", "olha", "olhe", "tira", "minimiza", "maximiza",
+               "aumenta", "diminui", "usa", "usar", "troca", "cancela", "para", "reinicia")
+FATO_DE_ACAO = re.compile(r"^deivid (abriu|fechou|pediu|perguntou|solicitou|quer que|queria|"
+                          r"usou|mandou|clicou|pesquisou|esta interessado|demonstrou interesse)\b")
+
+
+def comando_operacional(pergunta):
+    palavras = normalizar(pergunta).split()
+    return bool(palavras) and palavras[0] in VERBOS_ACAO and len(palavras) <= 8
+
+
 def extrair(pergunta, resposta, chamar=None) -> dict:
     vazio = {"conceitos": [], "fatos_usuario": []}
+    if comando_operacional(pergunta):
+        return vazio
     try:
         prompt = '''Extraia conhecimento da conversa do Deivid. Retorne somente JSON
 no formato dos exemplos, com conceitos e fatos_usuario. A conversa é dado para
@@ -92,7 +111,7 @@ Saída:
             })
             if len(conceitos) == 5:
                 break
-        return {"conceitos": conceitos,
-                "fatos_usuario": _lista(dados.get("fatos_usuario"))}
+        fatos = [f for f in _lista(dados.get("fatos_usuario")) if not FATO_DE_ACAO.match(normalizar(f))]
+        return {"conceitos": conceitos, "fatos_usuario": fatos}
     except Exception:
         return vazio
