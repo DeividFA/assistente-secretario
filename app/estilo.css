@@ -101,6 +101,11 @@ svg { width: 20px; height: 20px; display: block; }
 .texto pre { background: var(--fundo-1); border: 1px solid var(--fundo-0); padding: 8px; border-radius: 4px;
   white-space: pre-wrap; font: 13px Consolas, monospace; }
 .texto a { color: #00a8fc; }
+.confirmacao { display: flex; gap: 8px; margin-top: 8px; }
+.confirmacao button { background: var(--fundo-3); color: var(--texto); border: 1px solid var(--texto-3);
+  border-radius: 4px; padding: 4px 14px; }
+.confirmacao button:hover { background: var(--marca); color: #fff; border-color: var(--marca); }
+.confirmacao button:focus-visible { outline: 2px solid var(--marca); outline-offset: 2px; }
 .via { font-size: 11px; color: var(--texto-3); margin-left: 4px; }
 .sistema { padding: 2px 16px 2px 72px; color: var(--texto-3); font-size: 13px; }
 .sistema.erro { color: #ff7a7d; white-space: pre-wrap; }

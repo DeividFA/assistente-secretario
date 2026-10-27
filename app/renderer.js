@@ -71,6 +71,22 @@ function elementoMensagem(m, anterior) {
         <time>${hora(m.ts)}</time>${m.via === 'voz' ? '<span class="via">· por voz</span>' : ''}</div>
       <div class="texto">${formatar(m.texto)}</div>
     </div>`;
+  if (sec && m.texto.trimEnd().endsWith('?') && m === atual().mensagens[atual().mensagens.length - 1]) {
+    const botoes = document.createElement('div');
+    botoes.className = 'confirmacao';
+    for (const rotulo of ['Sim', 'Não']) {
+      const botao = document.createElement('button');
+      botao.type = 'button';
+      botao.textContent = rotulo;
+      botao.onclick = () => {
+        const texto = rotulo.toLowerCase();
+        adicionar({ autor: 'voce', texto, via: 'texto' });
+        window.secretario.enviar({ cmd: 'texto', texto });
+      };
+      botoes.appendChild(botao);
+    }
+    div.querySelector('.corpo').appendChild(botoes);
+  }
   return div;
 }
 
@@ -86,6 +102,7 @@ function adicionar(m) {
   salvar();
   const box = $('mensagens');
   const noFim = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  box.querySelectorAll('.confirmacao').forEach((botoes) => botoes.remove());
   box.appendChild(elementoMensagem(m, anterior));
   if (noFim || m.autor === 'voce') box.scrollTop = box.scrollHeight;
 }
