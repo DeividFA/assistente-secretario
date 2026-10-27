@@ -43,6 +43,7 @@ import dispositivos
 import vozes
 import memoria
 import extrator
+import vocabulario
 from vocabulario import ativacao_tolerante
 
 from comum import BASE, Microfone, bip, falar, normalizar, texto_para_fala, transcrever
@@ -818,11 +819,13 @@ class Assistente:
         if self.mic.stream is None:
             time.sleep(0.1)
             return None
-        audio = self.mic.gravar_fala(espera_max=0.5)
+        audio = self.mic.gravar_fala(espera_max=0.5, detalhado=True)
         if audio is None:
             return None
         em_conversa = time.monotonic() < self.conversa_ate
-        texto = transcrever(audio)
+        audio, pausas = audio
+        detalhes = transcrever(audio, detalhado=True)
+        texto = detalhes['texto']
         registro.evento("Transcrição", "ok" if texto else "")
         if not texto:
             return None
@@ -834,10 +837,26 @@ class Assistente:
             if not self.apps_mic:
                 bip()
             self.estado("escutando")
-            audio = self.mic.gravar_fala(espera_max=8)
+            audio = self.mic.gravar_fala(espera_max=8, detalhado=True)
             self.estado_ocioso()
-            comando = transcrever(audio) if audio is not None else ""
+            if audio is not None:
+                audio, pausas = audio
+                detalhes = transcrever(audio, detalhado=True)
+                comando = detalhes['texto']
+            else:
+                comando = ""
         if comando:
+            import padrao_fala
+            try:
+                termos = vocabulario.termos()
+            except Exception:
+                termos = []
+            try:
+                padrao_fala.registrar_fala(comando, detalhes['palavras'], pausas, termos=termos)
+            except Exception as erro:
+                registrar('ERRO', f'Padrão de fala: {erro}')
+            emitir(evento='transcricao', texto=comando,
+                   duvidosas=padrao_fala.duvidosas(detalhes['palavras'], termos))
             self.mensagem("voce", comando)
             self.comando_mic_ate = 0.0
             self.atualizar_microfone()

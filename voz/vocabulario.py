@@ -2,6 +2,7 @@
 
 import json
 import re
+import sqlite3
 import threading
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -39,6 +40,11 @@ def termos(cofre=COFRE, limite=60):
             return 0
 
     nomes = list(FIXOS)
+    try:
+        import padrao_fala
+        nomes.extend(p for p, _ in padrao_fala.resumo()['palavras'][:20])
+    except (OSError, ValueError, sqlite3.Error):
+        pass
     for nota in sorted(notas, key=atualizado, reverse=True):
         nomes.append(nota.get("titulo", ""))
         aliases = nota.get("aliases", [])
@@ -75,7 +81,15 @@ def corrigir(texto):
     if not pares:
         return texto
     padrao = r"(?<!\w)(?:" + "|".join(re.escape(p) for p in sorted(pares, key=len, reverse=True)) + r")(?!\w)"
-    return re.sub(padrao, lambda m: pares[m.group().casefold()], texto, flags=re.I)
+    def substituir(encontrado):
+        correto = pares[encontrado.group().casefold()]
+        try:
+            import padrao_fala
+            padrao_fala.registrar_correcao(encontrado.group().casefold(), correto)
+        except (OSError, sqlite3.Error):
+            pass
+        return correto
+    return re.sub(padrao, substituir, texto, flags=re.I)
 
 
 def aprender_correcao(errado, certo):

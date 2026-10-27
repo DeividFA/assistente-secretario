@@ -18,6 +18,8 @@ PADROES = {
     "janela_conversa": 15,
     "palavra_ativacao": "secretário",
     "pausa_fala": 1.4,
+    "pausa_auto": True,
+    "idiomas": ["pt"],
     "pasta_backup": str(Path.home() / "Backups" / "Secretario"),
     "pasta_backup_extra": None,
 }

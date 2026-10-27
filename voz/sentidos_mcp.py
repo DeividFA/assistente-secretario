@@ -38,6 +38,13 @@ _escala = {"fator": 1.0, "x0": 0, "y0": 0}
 LEMBRETES = Path(__file__).resolve().parent / "lembretes.json"
 
 
+@mcp.tool()
+def aprender_pronuncia(ouvido: str, correto: str) -> str:
+    """Aprende um termo mal reconhecido; protege palavras comuns isoladas."""
+    import padrao_fala
+    return "Pronúncia aprendida." if padrao_fala.aprender_pronuncia(ouvido, correto) else "Correção recusada: palavra comum ou trecho vazio."
+
+
 def _arquivo(prefixo):
     return CAPTURAS / f"{prefixo}_{datetime.now():%Y%m%d_%H%M%S}.jpg"
 
@@ -45,7 +52,29 @@ def _arquivo(prefixo):
 @mcp.tool()
 def vozes_disponiveis() -> list[dict]:
     """Lista vozes locais e online; Edge envia o texto à Microsoft."""
-    return vozes.listar()
+    resultado = vozes.listar()
+    import config
+    try:
+        import pythoncom
+        import win32com.client
+        pythoncom.CoInitialize()
+        try:
+            sapi = win32com.client.Dispatch('SAPI.SpVoice')
+            import locale
+            instalados = set()
+            for token in sapi.GetVoices():
+                for codigo in token.GetAttribute('Language').split(';'):
+                    nome = locale.windows_locale.get(int(codigo, 16), '')
+                    instalados.add(nome.split('_')[0])
+            for idioma in config.carregar().get('idiomas', ['pt']):
+                if idioma.split('-')[0] not in instalados:
+                    resultado.append({'id': 'windows:' + idioma, 'idioma': idioma,
+                                      'aviso': 'Não há voz do Windows para este idioma. Instale em Configurações > Hora e idioma > Fala.'})
+        finally:
+            pythoncom.CoUninitialize()
+    except Exception:
+        resultado.append({'id': 'windows', 'aviso': 'Não foi possível consultar os idiomas das vozes do Windows.'})
+    return resultado
 
 
 @mcp.tool()

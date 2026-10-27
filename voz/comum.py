@@ -165,7 +165,7 @@ class Microfone:
         ruido = float(np.median([rms(b) for b in blocos]))
         return max(0.01, ruido * 3.5)
 
-    def gravar_fala(self, espera_max=None, duracao_max=30.0, pausa=None):
+    def gravar_fala(self, espera_max=None, duracao_max=30.0, pausa=None, detalhado=False):
         """Espera alguém falar e devolve o áudio até uma pausa. None se ninguém falou
         dentro de espera_max segundos."""
         antes = deque(maxlen=10)  # guarda 300 ms antes do início da fala
@@ -174,6 +174,7 @@ class Microfone:
         audio = []
         blocos_voz = 0
         blocos_silencio = 0
+        pausas = []
         # 0,9 s cortava frases em que o Deivid pausa para pensar ("abra o meu... LinkedIn")
         pausa = pausa if pausa is not None else float(config.carregar().get("pausa_fala", 1.4))
         limite_silencio = int(pausa * TAXA / BLOCO)
@@ -201,9 +202,12 @@ class Microfone:
             if bloco is None:
                 continue
             audio.append(bloco)
+            if rms(bloco) >= self.limiar and blocos_silencio:
+                pausas.append(blocos_silencio * BLOCO / TAXA)
             blocos_silencio = blocos_silencio + 1 if rms(bloco) < self.limiar else 0
             if blocos_silencio >= limite_silencio or len(audio) * BLOCO / TAXA > duracao_max:
-                return np.concatenate(audio)
+                resultado = np.concatenate(audio)
+                return (resultado, pausas) if detalhado else resultado
 
     def fechar(self):
         self.liberar()
@@ -214,7 +218,7 @@ _termos = None
 _termos_ate = 0
 
 
-def transcrever(audio):
+def transcrever(audio, detalhado=False):
     """Transcreve áudio 16 kHz mono (float32), com fallback para Whisper local."""
     global _modelo, _termos, _termos_ate
     configuracao = config.carregar()
@@ -223,6 +227,7 @@ def transcrever(audio):
         _termos = vocabulario.termos()
         _termos_ate = agora + 300
     texto = None
+    detalhes = {"texto": "", "palavras": [], "idioma": "pt", "prob_idioma": 0.0}
     provedor = configuracao.get("transcricao", "local")
     if provedor in ("groq", "openai"):
         try:
@@ -243,16 +248,28 @@ def transcrever(audio):
             from faster_whisper import WhisperModel
             nome = os.environ.get("SECRETARIO_WHISPER", configuracao["modelo_whisper"])
             _modelo = WhisperModel(nome, device="cpu", compute_type="int8")
-        segmentos, _ = _modelo.transcribe(
-            audio, language="pt", beam_size=1, condition_on_previous_text=False,
-            hotwords=" ".join(_termos),
-            initial_prompt="Vocabulário: " + ", ".join(_termos[:15]) + ".",
-            vad_filter=True, vad_parameters={"min_silence_duration_ms": 500},
-        )
-        texto = " ".join(s.text.strip() for s in segmentos).strip()
+        import padrao_fala
+
+        def reconhecer(idioma):
+            segmentos, info = _modelo.transcribe(
+                audio, language=idioma, beam_size=1, condition_on_previous_text=False,
+                hotwords=" ".join(_termos), word_timestamps=detalhado,
+                initial_prompt="Vocabulário: " + ", ".join(_termos[:15]) + ".",
+                vad_filter=True, vad_parameters={"min_silence_duration_ms": 500})
+            segmentos = list(segmentos)
+            return {"texto": " ".join(s.text.strip() for s in segmentos).strip(),
+                    "palavras": [{"palavra": p.word.strip(), "prob": p.probability}
+                                 for s in segmentos for p in (getattr(s, 'words', None) or [])],
+                    "idioma": getattr(info, "language", None),
+                    "prob_idioma": getattr(info, "language_probability", None)}
+
+        detalhes = padrao_fala.escolher_idioma(reconhecer, configuracao.get('idiomas', ['pt']))
+        texto = detalhes['texto']
     if normalizar(texto) in {normalizar(a) for a in ALUCINACOES}:
-        return ""
-    return vocabulario.corrigir(texto)
+        texto = ""
+        detalhes['palavras'] = []
+    detalhes['texto'] = vocabulario.corrigir(texto)
+    return detalhes if detalhado else detalhes['texto']
 
 
 _processo_fala = None
