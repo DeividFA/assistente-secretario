@@ -71,6 +71,8 @@ def registrar(quem, texto):
     linha = f"{datetime.now():%Y-%m-%d %H:%M:%S}  {quem}: {texto}"
     if not IPC:
         print(linha, flush=True)
+    if LOG.exists() and LOG.stat().st_size > 1024 * 1024:
+        LOG.replace(LOG.with_name("log_voz.1.txt"))
     with LOG.open("a", encoding="utf-8") as f:
         f.write(linha + "\n")
 
