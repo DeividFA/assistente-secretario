@@ -91,6 +91,8 @@ def emitir(**evento):
     if evento.get('evento') in ('mensagem', 'ferramenta', 'erro'):
         evento.setdefault('tarefa', getattr(_contexto, 'id', None))
     trabalho = getattr(_contexto, 'trabalho', {})
+    if trabalho.get('motor') and evento.get('evento') in ('mensagem', 'ferramenta', 'erro'):
+        evento.setdefault('motor', trabalho['motor'])
     if trabalho.get('origem') == 'celular' and evento.get('evento') in ('mensagem', 'ferramenta', 'erro'):
         evento.setdefault('origem', 'celular')
         evento.setdefault('aparelho', trabalho['aparelho'])
@@ -128,6 +130,25 @@ def nome_ferramenta(nome):
         if nome.startswith(prefixo):
             return rotulo
     return nome
+
+
+LOCAIS = {"gemma"}  # motores que rodam no próprio PC
+
+
+def escolher_motor(preferido, ocupacao, disponiveis, ordem, vagas):
+    """Escolhe sem consultar serviços nem alterar os argumentos recebidos."""
+    # Quem escolhe o Gemma quer que nada saia do PC: espera a vaga em vez de ir para a nuvem.
+    candidatos = [preferido] if preferido in LOCAIS else [preferido, *ordem]
+    for motor in dict.fromkeys(candidatos):
+        if motor not in disponiveis:
+            continue
+        tipo = provedores.MOTORES.get(motor, {}).get('tipo')
+        limite = vagas.get(motor, vagas.get('api', 0) if tipo == 'api' else 0)
+        if motor == 'gemma':
+            limite = min(limite, 1)
+        if ocupacao.get(motor, 0) < limite:
+            return motor
+    return None
 
 
 class Assistente:
@@ -216,13 +237,33 @@ class Assistente:
             try:
                 with self.trava:
                     pendentes = [] if self.reparando else [t for t in fila.listar() if t['status'] == 'pendente']
-                    if pendentes:
-                        motor = pendentes[0]['motor']
-                        locais = any(t['motor'] == 'gemma' for t in self.trabalhos.values())
-                        vaga = (not self.trabalhos if motor == 'gemma'
-                                else not locais and len(self.trabalhos) < 2)
-                        if vaga:
-                            tarefa = fila.proxima()
+                    ocupacao = {}
+                    for trabalho in self.trabalhos.values():
+                        nome = trabalho['motor']
+                        ocupacao[nome] = ocupacao.get(nome, 0) + 1
+                    ordem = self.config_mic['motores_paralelos']
+                    disponiveis = {nome for nome in dict.fromkeys([self.motor, *ordem])
+                                   if pendentes and provedores.disponivel(nome)[0]}
+                    for pendente in pendentes:
+                        # Uma derivação paralela não implica dependência da sessão.
+                        # Pedidos explicitamente dependentes conservam o --resume/fork.
+                        permitidos = ({'claude'} & disponiveis
+                                      if pendente.get('depende_sessao') else disponiveis)
+                        motor = escolher_motor(self.motor, ocupacao, permitidos, ordem,
+                                               self.config_mic['vagas'])
+                        if motor is not None:
+                            # Reserva o pedido escolhido e seu motor na mesma transação.
+                            con = fila._conectar(fila.BANCO)
+                            try:
+                                with con:
+                                    inicio = datetime.now().isoformat()
+                                    reservado = con.execute(
+                                        "UPDATE fila SET status = 'rodando', inicio = ?, motor = ? "
+                                        "WHERE id = ? AND status = 'pendente'",
+                                        (inicio, motor, pendente['id'])).rowcount
+                                tarefa = dict(pendente, motor=motor, status='rodando', inicio=inicio) if reservado else None
+                            finally:
+                                con.close()
                             if tarefa:
                                 if getattr(self, 'ponte', None) is not None:
                                     aparelho = self.ponte.origem(tarefa['id'])
@@ -237,7 +278,7 @@ class Assistente:
                                 self.trabalhos[tarefa['id']] = tarefa
                                 self.emitir_fila()
                                 threading.Thread(target=self.trabalhar, args=(tarefa,), daemon=True).start()
-                                continue
+                                ocupacao[motor] = ocupacao.get(motor, 0) + 1
             except Exception as e:
                 diagnostico.registrar_bug("motor", e, e.__traceback__,
                                          {"motor": getattr(self, "motor", ""),
@@ -427,6 +468,8 @@ class Assistente:
                 def chamar(mensagens, imagens=None):
                     if trabalho['cancelado'] or not self.ativo:
                         raise RuntimeError("Tarefa cancelada.")
+                    mensagens = [dict(m) for m in mensagens]
+                    mensagens[0]['content'] = PROMPT_VOZ + '\n\n' + mensagens[0]['content']
                     saida = provedores.chamar_api(motor, mensagens, json=True, imagens=imagens)
                     if trabalho['cancelado'] or not self.ativo:
                         raise RuntimeError("Tarefa cancelada.")

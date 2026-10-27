@@ -5,6 +5,8 @@ from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
 PADROES = {
+    "motores_paralelos": ["claude", "codex", "gemma"],
+    "vagas": {"claude": 2, "codex": 1, "gemini-cli": 1, "gemma": 1, "api": 2},
     "ponte_ativa": False,
     "pasta_apk": "celular/app/build/outputs/apk",
     "microfone": None,

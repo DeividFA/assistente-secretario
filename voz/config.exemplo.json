@@ -1,4 +1,6 @@
 {
+    "motores_paralelos": ["claude", "codex", "gemma"],
+    "vagas": {"claude": 2, "codex": 1, "gemini-cli": 1, "gemma": 1, "api": 2},
     "microfone": null,
     "modelo_whisper": "small",
     "velocidade_fala": 190,
