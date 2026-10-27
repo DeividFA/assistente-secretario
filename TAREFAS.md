@@ -627,3 +627,137 @@ Junto com a Fase 2: (T19 ‖ T21 ‖ T25) → (T20 ‖ T22 ‖ T24) → T26 → 
 
 ## Ordem de execução atualizada
 (T26 ‖ T30) → T23 → T28 → T16 → T17 → T31 → T29 → T32 → T27.
+
+---
+
+# Fase 6 — vozes baixáveis
+
+## T33 — Vozes de resposta além da voz do Windows (Piper local e Edge online)
+- Depende de: T23 (mexe nos mesmos arquivos da interface). Arquivos: criar `voz/vozes.py`,
+  `voz/falar_proc.py` e `voz/tests/test_vozes.py`; `voz/comum.py` (`falar`), `voz/config.py`,
+  `voz/assistente_voz.py`, `voz/sentidos_mcp.py`, `voz/voz_prompt.md`, `app/main.js`,
+  `app/renderer.js`, `app/index.html`, `app/estilo.css`, `voz/requirements.txt` (se existir).
+- Pacotes (o revisor instala antes; leia o código deles em `voz/.venv/Lib/site-packages` para
+  usar a API da versão instalada): `piper-tts`, `edge-tts`, `miniaudio`.
+- Fazer:
+  - `vozes.py` — catálogo `CATALOGO` com id, nome, tipo, idioma, tamanho aproximado, online:
+    - `windows` (padrão): voz SAPI instalada (pyttsx3), como hoje.
+    - Piper (local, neural, offline), baixadas de
+      `https://huggingface.co/rhasspy/piper-voices/resolve/main/<lang>/<locale>/<nome>/<qual>/<locale>-<nome>-<qual>.onnx`
+      e `.onnx.json`: `piper:pt_BR-faber-medium`, `piper:pt_BR-cadu-medium`,
+      `piper:pt_BR-jeff-medium`, `piper:pt_BR-edresson-low`, `piper:pt_PT-tugão-medium`
+      (codifique o "ã" na URL), `piper:en_US-amy-medium`.
+    - Edge (online, gratuita, o texto vai para a Microsoft): `edge:pt-BR-FranciscaNeural`,
+      `edge:pt-BR-AntonioNeural`, `edge:pt-BR-ThalitaMultilingualNeural`.
+  - Funções: `pasta_modelos()` = `voz/modelos_voz/` (no .gitignore); `listar()` → lista de dicts
+    com `instalada` (Piper: os dois arquivos existem; windows/edge: sempre True);
+    `baixar(id, progresso=None)` baixa com urllib para `.part`, chama `progresso(feito, total)`,
+    confere que o `.onnx.json` é JSON válido e só então renomeia; aceita só ids do catálogo
+    (nada de URL livre); `remover(id)`; `sintetizar(texto, id, velocidade)` →
+    `(amostras_float32, taxa)`; Piper: `length_scale = 190 / velocidade`; Edge: `rate`
+    `"+N%"`/`"-N%"` a partir de `velocidade/190`, áudio mp3 decodificado com `miniaudio`.
+  - `falar_proc.py`: processo de fala que **fica aberto** (testado aqui: Piper 1.8 levou ~8 s
+    para 2,7 s de áudio contando o carregamento do modelo de 63 MB; Edge ~1,5 s). Lê linhas
+    JSON no stdin `{"texto","voz","velocidade"}`, guarda a `PiperVoice` carregada entre falas,
+    sintetiza frase por frase (`voice.synthesize(texto, syn_config=SynthesisConfig(
+    length_scale=...))` devolve pedaços com `audio_float_array` e `config.sample_rate`) e toca
+    cada pedaço com `sounddevice` assim que fica pronto; ao terminar escreve `{"fim":true}` no
+    stdout. Windows continua com pyttsx3. Se a voz escolhida falhar (não instalada, sem
+    internet, erro do pacote), escreve o erro no stderr e fala com a voz do Windows — nunca
+    fica mudo. `comum.falar(texto, esperar)` usa um único processo global (recria se morreu);
+    interromper a fala continua sendo matar o processo (o próximo `falar` recria). Mantenha
+    um objeto com `.kill()`, `.wait()` e `.poll()` como retorno, para o código que hoje
+    interrompe com `proc.kill()` continuar funcionando.
+  - `config.py`: `"voz": "windows"`.
+  - Motor (`assistente_voz.py`): comandos IPC `{"cmd":"vozes"}` → evento
+    `{"evento":"vozes","lista":[...],"atual":id}`; `{"cmd":"voz","valor":id}` grava no config e
+    responde com `vozes`; `{"cmd":"baixar_voz","valor":id}` baixa em thread, emite
+    `{"evento":"download_voz","id","feito","total"}` (no máximo 1 evento por 5%) e no fim `vozes`
+    ou `erro`; `{"cmd":"amostra_voz","valor":id}` fala "Olá, Deivid. Esta é a minha nova voz."
+  - Voz por comando falado (regex no `executar`, antes da fila): "usa a voz <nome>" / "troca a
+    voz para <nome>" → procura pelo nome curto (faber, cadu, jeff, edresson, francisca, antonio,
+    thalita, windows/maria); se não estiver instalada, responde "Essa voz ainda não foi baixada,
+    quer que eu baixe?" e um "sim" na próxima fala baixa e ativa.
+  - `sentidos_mcp.py`: `vozes_disponiveis()`, `baixar_voz(id)`, `usar_voz(id)`.
+  - Interface: no cartão de voz, botão "Voz" abre um painel com a lista (nome, local/online,
+    tamanho, estado), botões "Baixar" (barra de progresso), "Ouvir", "Usar" e "Remover"; a
+    voz atual marcada. Vozes online mostram o aviso "usa internet; o texto é enviado à
+    Microsoft".
+- Testes (sem rede e sem áudio): catálogo e URLs; `baixar` com `urllib.request.urlopen` falso
+  (progresso, `.part`, JSON inválido rejeitado, id fora do catálogo recusado); `listar` com pasta
+  temporária; conversão de velocidade para Piper e Edge; queda para a voz do Windows quando
+  `sintetizar` levanta erro; regex do comando falado.
+- Verificação: `node --check` nos .js; não rode o Python do venv (o revisor roda).
+
+---
+
+# Fase 7 — conviver com o Deivid usando o computador
+
+## T34 — Microfone compartilhado: não prender o dispositivo
+- Arquivos: `voz/comum.py` (`Microfone`), criar `voz/dispositivos.py` e
+  `voz/tests/test_dispositivos.py`; `voz/assistente_voz.py`, `voz/config.py`, `app/main.js`,
+  `app/renderer.js`, `app/index.html`, `app/estilo.css`.
+- Fazer:
+  - `Microfone.liberar()` fecha o stream (o ícone de microfone do Windows apaga) e
+    `Microfone.retomar()` reabre e recalibra. Mutar pelo usuário (`pausado`) passa a liberar de
+    verdade, não só descartar o áudio. Abrir sempre em modo compartilhado (nunca exclusivo;
+    se o dispositivo for WASAPI, `sd.WasapiSettings(exclusive=False)`).
+  - Recuperação: se o stream der erro ou o dispositivo sumir (fone desconectado), tenta reabrir
+    com o dispositivo padrão a cada 2 s, sem derrubar o motor; emite `estado` com o aviso.
+  - `dispositivos.apps_usando_microfone()` lê no registro
+    `HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone`
+    (subchaves de apps e `NonPackaged\<caminho com #>`): em uso = `LastUsedTimeStart > 0` e
+    `LastUsedTimeStop == 0`. Ignora o próprio secretário: testado aqui, o Windows registra o
+    motor como o Python BASE (`C:#Users#deivi#AppData#Local#Programs#Python#Python312#python.exe`),
+    não o do venv — compare com `sys._base_executable` (trocando `\` por `#`, sem diferenciar
+    maiúsculas) e ignore também caminhos com `electron.exe` do app. Devolve nomes amigáveis (Discord.exe → "Discord", chrome.exe → "Chrome", etc.).
+  - Config `"mic_em_chamada": "liberar"` (padrão) | `"compartilhar"`: com "liberar", o motor
+    consulta a cada 3 s; se outro app está usando o microfone, chama `liberar()` e emite
+    `{"evento":"microfone","estado":"liberado","app":"Discord"}`; quando o outro app soltar,
+    `retomar()`. Durante a chamada, as respostas não são faladas (só aparecem no app e numa
+    notificação do Windows), para não vazar som na ligação. O atalho Ctrl+Shift+Space continua
+    funcionando: abre o microfone só para aquele comando (aperte para falar) e libera depois.
+  - Config `"modo_microfone": "continuo"` (padrão) | `"sob_demanda"`: sob demanda, o microfone
+    só abre pelo atalho/botão e fecha ao fim da janela de conversa (`janela_conversa`).
+  - Interface: no cartão de voz, o estado "Microfone liberado — Discord em uso" e a escolha
+    contínuo/sob demanda.
+- Testes: `apps_usando_microfone` com `winreg` falso (em uso, parado, o próprio secretário
+  ignorado, NonPackaged com #); máquina de estados liberar/retomar com stream falso; recuperação
+  após erro do stream.
+
+## T35 — Trabalhar por trás sem atrapalhar o Deivid
+- Arquivos: criar `voz/segundo_plano.py` e `voz/tests/test_segundo_plano.py`;
+  `voz/sentidos_mcp.py`, `voz/acoes.py`, `voz/voz_prompt.md`. Pacote `pywinauto` (o revisor
+  instala; leia o código dele no venv).
+- Fazer:
+  - `segundo_plano.ocioso_ha()` → segundos desde a última tecla/mouse do usuário
+    (`GetLastInputInfo`). `esperar_vez(min_ocioso=2.0, max_espera=120)`: ações que usam o mouse
+    ou teclado de verdade esperam ele parar de mexer; devolve False se ele não parou.
+  - `restaurando_estado()` (context manager): guarda janela em primeiro plano, posição do
+    cursor e conteúdo da área de transferência; depois da ação, devolve tudo como estava.
+  - Ferramentas que NÃO usam o mouse/teclado nem trocam o foco (UI Automation via pywinauto
+    backend "uia"; captura via `PrintWindow` com `PW_RENDERFULLCONTENT`):
+    - `capturar_janela(titulo)` → imagem só daquela janela, mesmo atrás de outras
+      (minimizada: avisa que precisa estar restaurada).
+    - `ler_janela(titulo, limite=4000)` → lista compacta de elementos com índice, tipo, nome,
+      valor e automation_id (como o snapshot do Playwright).
+    - `preencher_campo(titulo, alvo, texto)` → `ValuePattern.SetValue` (alvo = índice, nome ou
+      automation_id).
+    - `acionar(titulo, alvo)` → Invoke, Toggle ou SelectionItem, o que o elemento suportar.
+    Se o app não expõe UI Automation, a ferramenta diz isso (aí o agente usa as físicas).
+  - Ferramentas físicas existentes (`clicar`, `arrastar`, `digitar`, `teclas`, `rolar`,
+    `focar_janela`): passam por `esperar_vez` + `restaurando_estado`. Se ele não parar de
+    mexer em 2 min, devolvem "O Deivid está usando o computador; não interrompi." `digitar`
+    não pode mais perder o que ele tinha copiado.
+  - `acoes.py` (Gemma): as mesmas regras nas ações físicas.
+  - `voz_prompt.md` e o skill (o revisor atualiza o skill): seção "Trabalhar sem atrapalhar":
+    ordem de preferência — sites: Playwright (não usa o mouse/teclado dele); programas:
+    `ler_janela`/`preencher_campo`/`acionar`/`capturar_janela`; mouse e teclado de verdade só
+    em último caso. Nunca trazer uma janela para frente, fechar, mover ou minimizar janelas dele
+    enquanto ele trabalha, a menos que ele peça.
+- Testes: `esperar_vez` com relógio e `ocioso_ha` falsos; `restaurando_estado` com funções
+  win32 falsas (restaura mesmo se a ação levantar erro); resolução do `alvo` (índice, nome,
+  automation_id) com árvore falsa; ferramentas físicas recusam quando ele não para.
+
+## Ordem de execução atualizada
+(T26 ‖ T30) → T23 → T33 → T35 → T34 → T28 → T16 → T17 → T31 → T29 → T32 → T27.

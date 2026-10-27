@@ -10,3 +10,5 @@ voz/sinais/
 voz/secretario.db*
 __pycache__/
 voz/correcoes.json
+voz/modelos_voz/
+voz/config.json
