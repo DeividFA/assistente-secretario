@@ -47,10 +47,10 @@ def normalizar(texto):
 
 
 class Microfone:
-    """Microfone aberto continuamente; gravar_fala() devolve o trecho entre o início
+    """Microfone compartilhado; gravar_fala() devolve o trecho entre o início
     da fala e a próxima pausa."""
 
-    def __init__(self, dispositivo=None):
+    def __init__(self, dispositivo=None, abrir=True):
         dispositivo = dispositivo if dispositivo is not None else os.environ.get(
             "SECRETARIO_MIC", config.carregar()["microfone"])
         if isinstance(dispositivo, str) and dispositivo.isdigit():
@@ -59,14 +59,98 @@ class Microfone:
         self.nivel = 0.0
         self.mudo = False      # enquanto o secretário fala
         self.pausado = False   # microfone mutado pelo usuário
-        self.stream = sd.InputStream(samplerate=TAXA, channels=1, dtype="float32",
-                                     blocksize=BLOCO, device=dispositivo, callback=self._cb)
-        self.stream.start()
-        self.limiar = self._calibrar()
+        self.dispositivo = dispositivo
+        self.preferido = dispositivo
+        self.stream = None
+        self.limiar = 0.01
+        self.erro = ""
+        self.tentar_apos = 0.0
+        self.trava = threading.RLock()
+        self.calibrando = False
+        self.ultimo_audio = 0.0
+        if abrir:
+            self.retomar()
+
+    def liberar(self):
+        with self.trava:
+            stream, self.stream = self.stream, None
+            if stream is not None:
+                try:
+                    stream.stop()
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+            self.nivel = 0.0
+            self.limpar()
+
+    @property
+    def pausado(self):
+        return self._pausado
+
+    @pausado.setter
+    def pausado(self, valor):
+        self._pausado = bool(valor)
+        if self._pausado:
+            self.liberar()
+
+    def retomar(self):
+        with self.trava:
+            if self.pausado:
+                return False
+            if self.disponivel():
+                return True
+            if time.monotonic() < self.tentar_apos:
+                return False
+            # Stream caiu: recomeça pelo microfone escolhido (o fone pode ter voltado);
+            # o padrão do Windows só entra quando ele falha.
+            if self.stream is not None:
+                self.dispositivo = self.preferido
+            self.liberar()
+            try:
+                dispositivo = sd.query_devices(self.dispositivo, "input")
+                api = sd.query_hostapis(dispositivo["hostapi"])["name"]
+                extra = sd.WasapiSettings(exclusive=False) if "WASAPI" in api.upper() else None
+                self.erro = ""
+                self.stream = sd.InputStream(samplerate=TAXA, channels=1, dtype="float32",
+                                             blocksize=BLOCO, device=self.dispositivo,
+                                             callback=self._cb, extra_settings=extra)
+                self.calibrando = True
+                self.ultimo_audio = time.monotonic()
+                self.stream.start()
+                self.limiar = self._calibrar()
+                if self.erro:
+                    raise RuntimeError(self.erro)
+                return True
+            except Exception as erro:
+                self.erro = str(erro) or type(erro).__name__
+                self.liberar()
+                # Alterna entre o escolhido e o padrão a cada tentativa.
+                self.dispositivo = None if self.dispositivo == self.preferido else self.preferido
+                self.tentar_apos = time.monotonic() + 2
+                return False
+            finally:
+                self.calibrando = False
+
+    def disponivel(self):
+        stream = self.stream
+        if stream is None or self.erro:
+            return False
+        try:
+            return stream.active and time.monotonic() - self.ultimo_audio < 2
+        except Exception as erro:
+            self.erro = str(erro)
+            return False
 
     def _cb(self, dados, frames, t, status):
+        # status (ex.: input overflow com a CPU ocupada pelo Whisper) é passageiro e não
+        # derruba o stream; queda de verdade aparece como falta de áudio em disponivel().
+        self.ultimo_audio = time.monotonic()
         self.nivel = rms(dados[:, 0])
-        if not (self.mudo or self.pausado):
+        if self.calibrando or not (self.mudo or self.pausado):
             self.fila.put(dados[:, 0].copy())
 
     def limpar(self):
@@ -77,7 +161,7 @@ class Microfone:
                 return
 
     def _calibrar(self, segundos=1.0):
-        blocos = [self.fila.get() for _ in range(int(segundos * TAXA / BLOCO))]
+        blocos = [self.fila.get(timeout=0.3) for _ in range(int(segundos * TAXA / BLOCO))]
         ruido = float(np.median([rms(b) for b in blocos]))
         return max(0.01, ruido * 3.5)
 
@@ -94,6 +178,8 @@ class Microfone:
         pausa = pausa if pausa is not None else float(config.carregar().get("pausa_fala", 1.4))
         limite_silencio = int(pausa * TAXA / BLOCO)
         while True:
+            if self.pausado or not self.disponivel():
+                return None
             try:
                 bloco = self.fila.get(timeout=0.3)
             except queue.Empty:
@@ -120,8 +206,7 @@ class Microfone:
                 return np.concatenate(audio)
 
     def fechar(self):
-        self.stream.stop()
-        self.stream.close()
+        self.liberar()
 
 
 _modelo = None

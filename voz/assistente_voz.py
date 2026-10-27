@@ -37,6 +37,7 @@ import agente_local
 import motores_cli
 import provedores
 import config
+import dispositivos
 import vozes
 from vocabulario import ativacao_tolerante
 
@@ -115,7 +116,13 @@ def nome_ferramenta(nome):
 
 class Assistente:
     def __init__(self):
-        self.mic = Microfone()
+        self.mic = Microfone(abrir=False)
+        self.config_mic = config.carregar()
+        self.apps_mic = []
+        self.consultar_mic_apos = 0.0
+        self.comando_mic_ate = 0.0
+        self.demanda_ativa = False
+        self.ultimo_estado_mic = None
         self.trabalhos = {}
         self.trava = threading.RLock()
         self.acordar = threading.Event()
@@ -224,7 +231,8 @@ class Assistente:
 
     def estado_ocioso(self):
         self.estado('falando' if self.falando else 'pensando' if self.ocupado
-                    else 'mudo' if self.mic.pausado else 'ouvindo')
+                    else 'mudo' if self.mic.pausado else 'ouvindo' if self.mic.stream is not None
+                    else 'microfone_indisponivel' if self.mic.erro else 'liberado')
 
     def mensagem(self, autor, texto):
         registrar({"voce": "Você", "secretario": "Secretário"}.get(autor, autor), texto)
@@ -232,6 +240,10 @@ class Assistente:
 
     def _dizer(self, texto, voz=None):
         """Fala com o microfone mudo, para não ouvir a própria voz."""
+        self.consultar_microfone()
+        if self.apps_mic:
+            emitir(evento="resposta_silenciosa", texto=texto)
+            return
         if self.silencio:
             return
         self.falando = True
@@ -583,7 +595,13 @@ class Assistente:
             emitir(evento='erro', texto=f'Não consegui anotar o pedido: {e}')
 
     def ouvir_comando(self):
-        audio = self.mic.gravar_fala()
+        self.atualizar_microfone()
+        if self.mic.stream is None:
+            time.sleep(0.1)
+            return None
+        audio = self.mic.gravar_fala(espera_max=0.5)
+        if audio is None:
+            return None
         em_conversa = time.monotonic() < self.conversa_ate
         texto = transcrever(audio)
         if not texto:
@@ -593,14 +611,66 @@ class Assistente:
             return None  # não foi comigo: ignora
         comando = texto[achou.end():].strip() if achou else texto
         if not comando:
-            bip()
+            if not self.apps_mic:
+                bip()
             self.estado("escutando")
             audio = self.mic.gravar_fala(espera_max=8)
             self.estado_ocioso()
             comando = transcrever(audio) if audio is not None else ""
         if comando:
             self.mensagem("voce", comando)
+            self.comando_mic_ate = 0.0
+            self.atualizar_microfone()
         return comando or None
+
+    def consultar_microfone(self):
+        with self.trava:
+            agora = time.monotonic()
+            if agora >= self.consultar_mic_apos:
+                anteriores = self.apps_mic
+                self.apps_mic = dispositivos.apps_usando_microfone()
+                self.consultar_mic_apos = agora + 3
+                if self.apps_mic and not anteriores:
+                    interromper_fala()
+
+    def atualizar_microfone(self):
+        self.consultar_microfone()
+        agora = time.monotonic()
+        chamada = bool(self.apps_mic) and self.config_mic.get("mic_em_chamada") == "liberar"
+        pedido = agora < self.comando_mic_ate
+        demanda = self.config_mic.get("modo_microfone") == "sob_demanda"
+        if agora >= self.conversa_ate and not pedido:
+            self.demanda_ativa = False
+        abrir = not self.mic.pausado and (pedido or (not chamada and (
+            not demanda or (self.demanda_ativa and agora < self.conversa_ate))))
+        if abrir:
+            ok = self.mic.retomar()
+            estado = "ouvindo" if ok else "indisponivel"
+        else:
+            self.mic.liberar()
+            estado = "mudo" if self.mic.pausado else "liberado"
+        app = ", ".join(self.apps_mic)
+        aviso = "Microfone indisponível; tentando o dispositivo padrão a cada 2 s." if estado == "indisponivel" else ""
+        atual = (estado, app, self.config_mic.get("modo_microfone"), aviso)
+        if atual != self.ultimo_estado_mic:
+            self.ultimo_estado_mic = atual
+            emitir(evento="microfone", estado=estado, app=app, modo=atual[2], aviso=aviso)
+            if aviso:
+                emitir(evento="estado", estado="microfone_indisponivel", aviso=aviso)
+            else:
+                self.estado_ocioso()
+
+    def vigiar_microfone(self):
+        while self.ativo:
+            self.consultar_microfone()
+            # Fechar é imediato; abrir e calibrar ficam na thread de escuta.
+            chamada = self.apps_mic and self.config_mic.get("mic_em_chamada") == "liberar"
+            agora = time.monotonic()
+            expirou = (self.config_mic.get("modo_microfone") == "sob_demanda"
+                       and agora >= max(self.comando_mic_ate, self.conversa_ate))
+            if self.mic.pausado or expirou or (chamada and agora >= self.comando_mic_ate):
+                self.mic.liberar()
+            time.sleep(0.2)
 
     def ler_app(self):
         """Lê comandos do app Electron pelo stdin."""
@@ -643,8 +713,16 @@ class Assistente:
                 self.cancelar(id=cmd.get('id'))
             elif tipo == "mudo":
                 self.mic.pausado = bool(cmd.get("valor"))
-                self.mic.limpar()
                 self.estado_ocioso()
+            elif tipo == "modo_microfone" and cmd.get("valor") in ("continuo", "sob_demanda"):
+                self.config_mic["modo_microfone"] = cmd["valor"]
+                try:
+                    caminho = BASE / "config.json"
+                    salvo = json.loads(caminho.read_text(encoding="utf-8")) if caminho.exists() else {}
+                    salvo["modo_microfone"] = cmd["valor"]
+                    caminho.write_text(json.dumps(salvo, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                except Exception as erro:
+                    emitir(evento="erro", texto=f"Não consegui salvar o modo do microfone: {erro}")
             elif tipo == "silencio":
                 self.silencio = bool(cmd.get("valor"))
                 if self.silencio:
@@ -652,8 +730,11 @@ class Assistente:
             elif tipo == "sessao":
                 self.sessao = cmd.get("id")
             elif tipo == "ouvir_agora":
-                bip()
-                self.conversa_ate = time.monotonic() + 10
+                self.demanda_ativa = True
+                self.comando_mic_ate = time.monotonic() + JANELA_CONVERSA
+                self.conversa_ate = self.comando_mic_ate
+                if not self.apps_mic:
+                    bip()
             elif tipo == "sair":
                 self.sair()
         self.sair()  # app fechou o stdin
@@ -711,6 +792,10 @@ class Assistente:
         self.sair()
 
     def rodar(self):
+        global JANELA_CONVERSA
+        JANELA_CONVERSA = float(self.config_mic.get("janela_conversa", 15))
+        self.consultar_microfone()
+        threading.Thread(target=self.vigiar_microfone, daemon=True).start()
         registro.preparar_banco()
         integridade = backup.verificar_banco()
         threading.Thread(target=self.falar_fila, daemon=True).start()

@@ -8,6 +8,8 @@ const ESTADOS = {
   pensando: ['Trabalhando', 'executando sua tarefa'],
   falando: ['Falando', 'respondendo em voz alta'],
   mudo: ['Microfone mudo', 'clique em Microfone para ativar'],
+  liberado: ['Microfone liberado', 'use Falar ou Ctrl+Shift+Espaço'],
+  microfone_indisponivel: ['Microfone indisponível', 'tentando o dispositivo padrão a cada 2 s'],
   parado: ['Motor parado', 'reiniciando…'],
 };
 const ICONES = {
@@ -335,6 +337,19 @@ $('fechar-vozes').onclick = () => $('painel-vozes').close();
 
 window.secretario.aoEvento((ev) => {
   switch (ev.evento) {
+    case 'microfone':
+      $('modo-microfone').value = ev.modo;
+      $('microfone-estado').textContent = ev.aviso || (ev.estado === 'liberado'
+        ? `Microfone liberado${ev.app ? ` — ${ev.app} em uso` : ' — use Falar ou Ctrl+Shift+Espaço'}`
+        : ev.estado === 'mudo' ? 'Microfone mudo — dispositivo liberado' : 'Microfone conectado');
+      break;
+    case 'resposta_silenciosa': {
+      const mensagens = atual().mensagens;
+      if (!mensagens.some((m) => m.autor === 'secretario' && m.texto === ev.texto && Date.now() - m.ts < 60000)) {
+        adicionar({ autor: 'secretario', texto: ev.texto });
+      }
+      break;
+    }
     case 'vozes':
       for (const voz of ev.lista) {
         if (voz.instalada) downloadsVoz.delete(voz.id);
@@ -369,6 +384,8 @@ window.secretario.aoEvento((ev) => {
       break;
   }
 });
+
+$('modo-microfone').onchange = (e) => window.secretario.enviar({ cmd: 'modo_microfone', valor: e.target.value });
 
 // sugestões do estado vazio
 for (const s of SUGESTOES) {

@@ -6,6 +6,8 @@ from pathlib import Path
 BASE = Path(__file__).resolve().parent
 PADROES = {
     "microfone": None,
+    "mic_em_chamada": "liberar",
+    "modo_microfone": "continuo",
     "modelo_whisper": "small",
     "velocidade_fala": 190,
     "voz": "windows",

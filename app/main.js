@@ -35,6 +35,7 @@ let estadoAtual = 'carregando';
 let mudo = false;
 let motores = { lista: [], atual: null };
 let vozes = { lista: [], atual: 'windows' };
+let emChamada = false;
 
 function reiniciarSecretario(completo) {
   if (saindo) return;
@@ -158,17 +159,19 @@ function verificarLembretes() {
 }
 
 function iniciarMotor() {
+  emChamada = false;
   motor = spawn(PYTHON, ['assistente_voz.py', '--ipc'], {
     cwd: VOZ, windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1' },
   });
   readline.createInterface({ input: motor.stdout }).on('line', (linha) => {
     let ev;
     try { ev = JSON.parse(linha); } catch { return; }
+    if (ev.evento === 'microfone') emChamada = Boolean(ev.app);
     if (ev.evento === 'motores') { motores = { lista: ev.lista, atual: ev.atual }; atualizarBandeja(); }
     if (ev.evento === 'vozes') vozes = { lista: ev.lista, atual: ev.atual };
     if (ev.evento === 'reiniciar') reiniciarSecretario(ev.completo === true);
     if (ev.evento === 'estado') { estadoAtual = ev.estado; atualizarBandeja(); }
-    if (ev.evento === 'mensagem' && ev.autor === 'secretario' && janela && !janela.isVisible()) {
+    if (ev.evento === 'resposta_silenciosa' || (ev.evento === 'mensagem' && ev.autor === 'secretario' && janela && !janela.isVisible() && !emChamada)) {
       const n = new Notification({ title: 'Secretário', body: ev.texto.slice(0, 200), icon: path.join(ICONES, 'app.png') });
       n.on('click', mostrar);
       n.show();
