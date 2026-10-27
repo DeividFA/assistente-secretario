@@ -34,6 +34,7 @@ let saindo = false;
 let estadoAtual = 'carregando';
 let mudo = false;
 let motores = { lista: [], atual: null };
+let ponte = { ativa: false, aparelhos: [] };
 let vozes = { lista: [], atual: 'windows' };
 let emChamada = false;
 const REPO = path.join(VOZ, '..');
@@ -208,6 +209,7 @@ function iniciarMotor() {
   readline.createInterface({ input: motor.stdout }).on('line', (linha) => {
     let ev;
     try { ev = JSON.parse(linha); } catch { return; }
+    if (ev.evento === 'ponte') ponte = { ...ev, qr: ev.ativa ? (ev.qr === undefined ? ponte.qr : ev.qr) : null };
     if (ev.evento === 'reparo') {
       fs.mkdirSync(SINAIS, { recursive: true });
       fs.writeFileSync(MARCA_REPARO, JSON.stringify({ commit: ev.commit, id: ev.id }));
@@ -218,7 +220,7 @@ function iniciarMotor() {
     if (ev.evento === 'vozes') vozes = { lista: ev.lista, atual: ev.atual };
     if (ev.evento === 'reiniciar') reiniciarSecretario(ev.completo === true);
     if (ev.evento === 'estado') { estadoAtual = ev.estado; atualizarBandeja(); }
-    if (ev.evento === 'resposta_silenciosa' || (ev.evento === 'mensagem' && ev.autor === 'secretario' && janela && !janela.isVisible() && !emChamada)) {
+    if (ev.origem !== 'celular' && (ev.evento === 'resposta_silenciosa' || (ev.evento === 'mensagem' && ev.autor === 'secretario' && janela && !janela.isVisible() && !emChamada))) {
       const n = new Notification({ title: 'Secretário', body: ev.texto.slice(0, 200), icon: path.join(ICONES, 'app.png') });
       n.on('click', mostrar);
       n.show();
@@ -237,6 +239,8 @@ function iniciarMotor() {
       await recuperarReparo();
     }
     motor = null;
+    ponte = { ativa: false, aparelhos: [] };
+    if (janela) janela.webContents.send('evento', { evento: 'ponte', ...ponte });
     estadoAtual = 'parado';
     atualizarBandeja();
     if (saindo) return;
@@ -254,9 +258,15 @@ function iniciarMotor() {
 ipcMain.on('cmd', (_e, cmd) => {
   if (cmd.cmd === 'mudo') return alternarMudo(cmd.valor);
   if (cmd.cmd === 'obsidian') return abrirObsidian();
+  if (cmd.cmd === 'ponte' && (!motor || !motor.stdin.writable)) {
+    if (janela) janela.webContents.send('evento', {
+      evento: 'ponte', ativa: false, aparelhos: [], erro: 'Aguarde o motor iniciar.'
+    });
+    return;
+  }
   enviarAoMotor(cmd);
 });
-ipcMain.handle('estado', () => ({ estado: estadoAtual, mudo, motores, vozes }));
+ipcMain.handle('estado', () => ({ estado: estadoAtual, mudo, motores, vozes, ponte }));
 
 app.whenReady().then(() => {
   app.setAppUserModelId('Secretario.Deivid');

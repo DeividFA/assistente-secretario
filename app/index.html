@@ -34,6 +34,15 @@
         </button>
       </div>
       <ul id="conversas"></ul>
+      <section aria-label="Celular">
+        <button id="btn-celular" type="button">Conectar celular</button>
+        <small id="ponte-estado" aria-live="polite">Ponte desligada</small>
+        <div id="ponte-painel" hidden>
+          <p>Leia o QR no celular. Ele permite acesso ao secretário.</p>
+          <img id="ponte-qr" width="220" height="220" alt="QR de pareamento do celular" hidden>
+          <ul id="ponte-aparelhos"></ul>
+        </div>
+      </section>
 
       <!-- cartão de voz (como o painel "Voz conectada" do Discord) -->
       <section class="cartao-voz" id="cartao-voz">

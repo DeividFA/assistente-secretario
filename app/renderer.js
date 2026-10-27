@@ -361,6 +361,7 @@ window.secretario.aoEvento((ev) => {
       downloadsVoz.set(ev.id, ev.total ? Math.min(100, ev.feito / ev.total * 100) : null);
       mostrarVozes(vozesAtuais.lista, vozesAtuais.atual);
       break;
+    case 'ponte': mostrarPonte(ev); break;
     case 'motores': mostrarMotores(ev.lista, ev.atual); break;
     case 'fila': mostrarFila(ev.tarefas); break;
     case 'estado': mostrarEstado(ev.estado); break;
@@ -427,7 +428,8 @@ $('btn-obsidian').onclick = () => window.secretario.enviar({ cmd: 'obsidian' });
 
 desenharConversas();
 desenharMensagens();
-window.secretario.estado().then(({ estado, mudo, motores, vozes }) => {
+window.secretario.estado().then(({ estado, mudo, motores, vozes, ponte }) => {
+  if (ponte) mostrarPonte(ponte);
   if (!vozesAtuais.lista.length && vozes) mostrarVozes(vozes.lista, vozes.atual);
   if (motorAtual === null && motores) mostrarMotores(motores.lista, motores.atual);
   mostrarEstado(estado);
@@ -472,3 +474,40 @@ $('btn-problemas').onclick = () => {
   window.secretario.enviar({ cmd: 'bugs' });
 };
 $('fechar-problemas').onclick = () => $('painel-problemas').close();
+
+let ponteAtiva = false;
+function mostrarPonte(ev) {
+  ponteAtiva = ev.ativa;
+  $('btn-celular').disabled = false;
+  $('btn-celular').textContent = ev.ativa ? 'Desconectar celular' : 'Conectar celular';
+  $('ponte-estado').textContent = ev.erro || (ev.ativa ? 'Ponte ligada' : 'Ponte desligada');
+  $('ponte-painel').hidden = !ev.ativa;
+  if (!ev.ativa || ev.qr === null) {
+    $('ponte-qr').removeAttribute('src');
+    $('ponte-qr').hidden = true;
+  } else if (ev.qr) {
+    $('ponte-qr').src = `data:image/png;base64,${ev.qr}`;
+    $('ponte-qr').hidden = false;
+  }
+  $('ponte-aparelhos').replaceChildren();
+  for (const aparelho of ev.aparelhos || []) {
+    const linha = document.createElement('li');
+    linha.textContent = `${aparelho.nome}${aparelho.revogado ? ' (revogado)' : ''} `;
+    if (!aparelho.revogado) {
+      const botao = document.createElement('button');
+      botao.textContent = 'Revogar';
+      botao.onclick = () => {
+        $('ponte-qr').removeAttribute('src');
+        $('ponte-qr').hidden = true;
+        window.secretario.enviar({ cmd: 'revogar_aparelho', id: aparelho.id });
+      };
+      linha.append(botao);
+    }
+    $('ponte-aparelhos').append(linha);
+  }
+}
+$('btn-celular').onclick = () => {
+  $('btn-celular').disabled = true;
+  $('ponte-estado').textContent = ponteAtiva ? 'Desligando…' : 'Conectando…';
+  window.secretario.enviar({ cmd: 'ponte', valor: !ponteAtiva });
+};

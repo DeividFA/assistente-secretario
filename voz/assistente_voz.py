@@ -84,11 +84,21 @@ if IPC:
 _saida = threading.Lock()
 _registro = threading.Lock()
 _contexto = threading.local()
+_ponte = None
 
 
 def emitir(**evento):
     if evento.get('evento') in ('mensagem', 'ferramenta', 'erro'):
         evento.setdefault('tarefa', getattr(_contexto, 'id', None))
+    trabalho = getattr(_contexto, 'trabalho', {})
+    if trabalho.get('origem') == 'celular' and evento.get('evento') in ('mensagem', 'ferramenta', 'erro'):
+        evento.setdefault('origem', 'celular')
+        evento.setdefault('aparelho', trabalho['aparelho'])
+    if _ponte is not None:
+        try:
+            _ponte.emitir(evento.copy())
+        except Exception as erro:
+            diagnostico.registrar_bug('ponte', erro)
     if IPC:
         with _saida:
             sys.stdout.write(json.dumps(evento, ensure_ascii=False) + "\n")
@@ -124,6 +134,8 @@ class Assistente:
     def __init__(self):
         self.mic = Microfone(abrir=False)
         self.config_mic = config.carregar()
+        self.config_mic['ponte_ativa'] = False
+        self.ponte = None
         self.apps_mic = []
         self.consultar_mic_apos = 0.0
         self.comando_mic_ate = 0.0
@@ -151,6 +163,13 @@ class Assistente:
         self.reparo_pendente = None
         self.reparando = False
         self.reinicio_reparo = False
+        try:
+            import ponte
+            self.ponte = ponte.Ponte(self.comando_celular, self.notificar_ponte)
+            global _ponte
+            _ponte = self.ponte
+        except Exception as erro:
+            diagnostico.registrar_bug('ponte', erro)
 
     @property
     def ocupado(self):
@@ -158,7 +177,18 @@ class Assistente:
             return bool(self.trabalhos)
 
     def emitir_fila(self):
-        emitir(evento="fila", tarefas=fila.listar())
+        tarefas = fila.listar()
+        if getattr(self, 'ponte', None) is not None:
+            try:
+                with self.ponte.conectar() as con:
+                    origens = {r['tarefa']: r['aparelho'] for r in con.execute(
+                        'SELECT tarefa, aparelho FROM pedidos_celular')}
+                for tarefa in tarefas:
+                    if tarefa['id'] in origens:
+                        tarefa.update(origem='celular', aparelho=origens[tarefa['id']])
+            except Exception as erro:
+                diagnostico.registrar_bug('ponte', erro)
+        emitir(evento="fila", tarefas=tarefas)
 
     def preparar_memoria(self):
         try:
@@ -194,6 +224,10 @@ class Assistente:
                         if vaga:
                             tarefa = fila.proxima()
                             if tarefa:
+                                if getattr(self, 'ponte', None) is not None:
+                                    aparelho = self.ponte.origem(tarefa['id'])
+                                    if aparelho is not None:
+                                        tarefa.update(origem='celular', aparelho=aparelho)
                                 tarefa.update(proc=None, cancelado=False,
                                               derivada=bool(self.trabalhos), sessao=self.sessao)
                                 if self.trabalhos:
@@ -255,6 +289,8 @@ class Assistente:
 
     def dizer(self, texto, esperar=False):
         trabalho = getattr(_contexto, 'trabalho', None)
+        if trabalho and trabalho.get('origem') == 'celular':
+            return
         if trabalho:
             with self.trava:
                 if trabalho.get('simultanea'):
@@ -665,6 +701,51 @@ class Assistente:
             # escuta o microfone, senão ele ficaria surdo nesse tempo.
             threading.Thread(target=self.enfileirar, args=(comando,), daemon=True).start()
 
+    def comando_celular(self, texto, aparelho):
+        with self.trava:
+            id = fila.adicionar(texto, motor=self.motor)
+            try:
+                with self.ponte.conectar() as con:
+                    con.execute('INSERT INTO pedidos_celular (tarefa, aparelho) VALUES (?, ?)',
+                                (id, aparelho))
+            except Exception:
+                fila.cancelar(id)
+                raise
+            self.emitir_fila()
+        self.acordar.set()
+        return [id]
+
+    def notificar_ponte(self, **evento):
+        self.config_mic['ponte_ativa'] = bool(evento.get('ativa'))
+        emitir(**evento)
+
+    def controlar_ponte(self, cmd):
+        global _ponte
+        try:
+            if self.ponte is None:
+                import ponte
+                self.ponte = ponte.Ponte(self.comando_celular, self.notificar_ponte)
+                _ponte = self.ponte
+            if cmd['cmd'] == 'revogar_aparelho':
+                if self.ponte.ativa:
+                    async def revogar():
+                        try:
+                            await self.ponte.revogar(int(cmd['id']))
+                            emitir(evento='ponte', ativa=True, qr=None, aparelhos=self.ponte.aparelhos())
+                        except Exception as erro:
+                            diagnostico.registrar_bug('ponte', erro)
+                            emitir(evento='ponte', ativa=self.ponte.ativa,
+                                   erro='Não foi possível revogar o aparelho.')
+                    import asyncio
+                    asyncio.run_coroutine_threadsafe(revogar(), self.ponte.loop)
+            elif cmd.get('valor') is True:
+                self.ponte.iniciar()
+            else:
+                self.ponte.desligar()
+        except Exception as erro:
+            diagnostico.registrar_bug('ponte', erro)
+            emitir(evento='ponte', ativa=False, erro='Não foi possível controlar a ponte.')
+
     def enfileirar(self, comando):
         try:
             prioridade, texto = fila.detectar_prioridade(comando)
@@ -806,7 +887,9 @@ class Assistente:
                                           "pedido": getattr(_contexto, "trabalho", {}).get("comando", "")})
                     emitir(evento="erro", texto=str(erro))
                 continue
-            if tipo == "texto" and cmd.get("texto", "").strip():
+            if tipo in ('ponte', 'revogar_aparelho'):
+                self.controlar_ponte(cmd)
+            elif tipo == "texto" and cmd.get("texto", "").strip():
                 registrar("Você (texto)", cmd["texto"])
                 self.executar(cmd["texto"].strip())
             elif tipo == "motor":
@@ -860,6 +943,8 @@ class Assistente:
 
     def sair(self):
         self.ativo = False
+        if self.ponte is not None:
+            self.ponte.desligar()
         interromper_fala()
         with self.trava:
             for trabalho in self.trabalhos.values():
