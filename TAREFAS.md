@@ -318,7 +318,7 @@ Cofre: `Path.home() / "Documents" / "Secretario"` (sempre aceitar `cofre=` como 
   não dividido, JSON inválido → `[texto]`) e sem conector não chama o modelo.
 
 ## T19 — Motor multitarefa (executor da fila)
-- Depende de: T10, T14, T15, T18. Arquivos: `voz/assistente_voz.py`.
+- Depende de: T10, T14, T18. Arquivos: `voz/assistente_voz.py`.
 - Fazer:
   - Pedido novo (voz ou texto) que não é comando de controle: `detectar_prioridade` →
     `dividir_pedidos` → `fila.adicionar` para cada parte. Fala curta: 1 tarefa → "Certo." se
@@ -352,4 +352,139 @@ Cofre: `Path.home() / "Documents" / "Secretario"` (sempre aceitar `cofre=` como 
 
 ## Ordem de execução da Fase 2
 Paralelo: T8, T10, T11 → depois T9, T13, T18 (paralelo) → T12 → T14 → T15 → T19 → T20 → T16 → T17.
+(Tarefas que alteram `voz/assistente_voz.py` rodam uma de cada vez.)
+
+---
+
+# Fase 3 — vários motores (Codex, Gemini, Grok, GPT…) e reconhecimento de voz melhor
+
+Nota: a T15 (seletor Claude/Gemma) foi INCORPORADA à T23, que faz o seletor com todos os
+motores do registro. Não execute a T15 separadamente. Onde outra tarefa diz "depende de
+T15", leia "depende de T23" (exceto a T19, que não depende mais dela).
+
+## T21 — Registro de provedores e chaves
+- Arquivos: criar `voz/provedores.py` e `voz/tests/test_provedores.py`.
+- Pode instalar: `keyring` no venv.
+- Fazer:
+  - `MOTORES`: dicionário com `nome → {"rotulo", "tipo", ...}`. Tipos:
+    - `"cli"` (agentes que usam o computador sozinhos): `claude` (Claude Code), `codex`
+      (`codex exec`), `gemini-cli` (`gemini -p`), `qwen` (`qwen -p`). Campo `executavel`.
+    - `"api"` (formato OpenAI `/chat/completions`): `grok` (xAI, `https://api.x.ai/v1`,
+      modelo padrão `grok-4`), `gpt` (`https://api.openai.com/v1`, `gpt-5`), `gemini`
+      (`https://generativelanguage.googleapis.com/v1beta/openai`, `gemini-2.5-flash`),
+      `deepseek` (`https://api.deepseek.com/v1`, `deepseek-chat`), `mistral`
+      (`https://api.mistral.ai/v1`, `mistral-large-latest`), `openrouter`
+      (`https://openrouter.ai/api/v1`, modelo configurável), `gemma` (Ollama em
+      `http://localhost:11434/v1`, `gemma3:4b`, sem chave). Campos `url`, `modelo`, `chave`
+      (nome da credencial; None para Ollama).
+    - O modelo de cada motor pode ser sobrescrito em `voz/config.json` → `"modelos": {"grok": "..."}`.
+  - Chaves: `salvar_chave(nome, valor)`, `ler_chave(nome)` com `keyring` (serviço
+    `"secretario"`); se não houver no keyring, tenta a variável de ambiente
+    (`XAI_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY`,
+    `OPENROUTER_API_KEY`). Nunca registrar chaves em log, evento ou exceção.
+  - `disponivel(nome) -> (bool, motivo)`: cli → `shutil.which(executavel)`; api → tem chave
+    (Ollama: responde em `/api/tags` com timeout 2 s).
+  - `listar() -> list[dict]`: `{nome, rotulo, tipo, disponivel, motivo}` de todos.
+  - `chamar_api(nome, mensagens, json=False, imagens=None, timeout=120) -> str`: POST em
+    `<url>/chat/completions` com `Authorization: Bearer`, `temperature 0.2`; `json=True` →
+    `response_format: {"type": "json_object"}`; imagens em base64 viram partes
+    `{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}` na última
+    mensagem do usuário. Erros HTTP viram `RuntimeError` com status e mensagem curta (sem a chave).
+- Testes: `listar` com `shutil.which`/keyring falsos; `chamar_api` com `urlopen` falso
+  verifica URL, cabeçalho, `response_format` e o formato das imagens; chave nunca aparece em
+  mensagens de erro.
+
+## T22 — Motores de linha de comando (Codex, Gemini CLI, Qwen)
+- Depende de: T21. Arquivos: criar `voz/motores_cli.py` e `voz/tests/test_motores_cli.py`.
+- Fazer: `montar_comando(nome, pedido, sessao=None, prompt_sistema="") -> list[str]` e
+  `interpretar_linha(nome, linha) -> dict|None` (devolve `{"tipo": "sessao"|"ferramenta"|
+  "resposta", ...}`), para:
+  - `codex`: `codex exec --json -s workspace-write -C <home> "<prompt_sistema>\n\nPedido: <pedido>"`
+    (retomar: `codex exec resume <sessao> ...` se `sessao`). Eventos JSONL: id da sessão/thread,
+    itens de comando/ferramenta → ferramenta, última mensagem do agente → resposta.
+  - `gemini-cli`: `gemini -p "<prompt>" --output-format json` (resposta no campo `response`).
+  - `qwen`: `qwen -p "<prompt>" --output-format json` (mesmo formato do gemini-cli).
+  Antes de fixar os formatos, rode `codex exec --help`, `gemini --help` (se instalado) e
+  `qwen --help` e siga o que eles mostram; documente no topo do arquivo a versão observada.
+  `executar(nome, pedido, ao_evento, sessao=None, prompt_sistema="") -> dict` roda o processo
+  (stdin DEVNULL, sem janela), chama `ao_evento` para cada evento e devolve
+  `{"resposta", "sessao", "ferramentas", "proc"}`; aceita ser cancelado matando a árvore
+  (`taskkill /T /F`).
+- Testes: `montar_comando` e `interpretar_linha` com linhas de exemplo de cada CLI.
+
+## T23 — Motor configurável no assistente e na interface
+- Depende de: T19, T21, T22. Arquivos: `voz/assistente_voz.py`, `app/main.js`,
+  `app/renderer.js`, `app/index.html`, `app/estilo.css`.
+- Fazer:
+  - `self.motor` aceita qualquer nome de `provedores.MOTORES`. `claude` continua com o
+    caminho atual; outros `cli` usam `motores_cli.executar` (mesmo prompt de voz e contexto de
+    memória); `api` usam `agente_local.executar(..., chamar=<chamar_api do provedor>)` — assim
+    Grok/GPT/Gemini/DeepSeek também usam o catálogo de ações (abrir, pesquisar, tela...).
+  - Voz: "secretário, usar <motor>" reconhece claude/cloud, codex, gemini/gêmini/jemini (API
+    se houver chave, senão gemini-cli), grok/groque, gpt/chat gpt, deepseek, mistral,
+    openrouter, gemma. Motor indisponível → fala o motivo e não troca.
+  - Evento `{"evento":"motores","lista":provedores.listar(),"atual":...}` ao iniciar e ao trocar;
+    comando `{"cmd":"motor","valor":nome}`.
+  - Interface: um menu suspenso no topo do chat, à esquerda da pílula de estado, com todos os motores
+    (indisponíveis em cinza com o motivo no `title`), agrupados em "Agentes" e "Modelos (API)".
+  - Bandeja: submenu "Motor" com itens `radio`.
+  - Comando `{"cmd":"chave","motor":nome,"valor":"..."}` chama `provedores.salvar_chave` (para a
+    tela de configurações da T27). A chave nunca volta para a interface.
+
+## T24 — Reconhecimento de voz: vocabulário, correções, VAD e palavra de ativação
+- Arquivos: `voz/comum.py`, `voz/assistente_voz.py`, criar `voz/vocabulario.py` e
+  `voz/tests/test_vocabulario.py`.
+- Fazer:
+  - `vocabulario.termos(cofre=memoria.COFRE, limite=60) -> list[str]`: títulos e aliases do
+    índice da memória (mais recentes primeiro) + nomes fixos (Deivid, Secretário, Claude,
+    Gemma, Codex, Gemini, Grok, Obsidian).
+  - `transcrever(audio)` usa `hotwords=" ".join(termos)` e `initial_prompt` curto com os 15
+    primeiros termos; `vad_filter=True` com `vad_parameters={"min_silence_duration_ms": 500}`.
+    Recarrega os termos no máximo a cada 5 minutos.
+  - Correções: `vocabulario.corrigir(texto) -> str` aplica pares de `voz/correcoes.json`
+    (`{"gloco de notas": "bloco de notas", "cloud": "Claude"}`) com fronteira de palavra,
+    sem diferenciar maiúsculas; `aprender_correcao(errado, certo)` grava o par (normalizado,
+    sem duplicar). `transcrever` aplica `corrigir` no fim.
+  - Palavra de ativação tolerante: além da regex atual, aceitar a primeira ou segunda palavra
+    com distância de edição ≤ 2 de "secretario" (`difflib.SequenceMatcher` ratio ≥ 0.8), ex.:
+    "secretaria", "se cretário", "secretárie".
+  - Modelo: `config.json` `"modelo_whisper"` aceita `small`, `medium`, `large-v3-turbo`.
+- Testes: `corrigir` (fronteira de palavra, maiúsculas), `aprender_correcao`, ativação
+  tolerante (aceita variações, rejeita "secretariado" e frases sem a palavra), `termos` com
+  índice falso.
+
+## T25 — Teste de velocidade do Whisper
+- Arquivos: criar `voz/ferramentas/benchmark_whisper.py`.
+- Fazer: gera 3 frases em português com a voz do Windows (pyttsx3 → wav em pasta temporária),
+  e para cada modelo passado em `--modelos small,medium,large-v3-turbo` mede o tempo de carga e
+  o tempo médio de transcrição (int8, CPU) e mostra a transcrição. Imprime uma tabela final.
+  Não altera configuração nenhuma.
+- Verificação: `py_compile`.
+
+## T26 — Transcrição na nuvem opcional
+- Depende de: T21, T24. Arquivos: `voz/comum.py`, `voz/provedores.py`.
+- Fazer: `config.json` `"transcricao": "local" | "groq" | "openai"`. Nuvem: POST multipart em
+  `https://api.groq.com/openai/v1/audio/transcriptions` (`whisper-large-v3-turbo`, chave
+  `GROQ_API_KEY`/keyring "groq") ou `https://api.openai.com/v1/audio/transcriptions`
+  (`gpt-4o-transcribe`), `language=pt`, `prompt` com os termos do vocabulário. Áudio float32 →
+  WAV 16 kHz em memória (`wave` + `io`). Qualquer falha cai para o Whisper local na hora.
+  Adicionar `groq` a `provedores` só como credencial (não é motor de chat).
+- Verificação: `py_compile`; testes existentes passam.
+
+## T27 — Configurações e correção de transcrição na interface
+- Depende de: T23, T24, T26. Arquivos: `app/renderer.js`, `app/index.html`, `app/estilo.css`,
+  `app/main.js`, `voz/assistente_voz.py`.
+- Fazer:
+  - Botão de engrenagem no painel do usuário abre um painel "Configurações": motor padrão,
+    modelo do Whisper, transcrição local/nuvem, e um campo de chave para cada provedor de API
+    (tipo password; mostra só "configurada"/"não configurada"; botão Salvar envia
+    `{"cmd":"chave",...}`). Mudanças de config vão por `{"cmd":"config","chave":...,"valor":...}`
+    e o motor grava em `voz/config.json`.
+  - Em mensagens "por voz" do usuário, um ícone de lápis permite editar o texto; ao salvar,
+    calcula as palavras que mudaram (difflib) e envia `{"cmd":"correcao","errado":...,"certo":...}`
+    → `vocabulario.aprender_correcao`.
+- Verificação: `node --check` nos .js; `py_compile`.
+
+## Ordem de execução (Fase 3, depois da Fase 2)
+Junto com a Fase 2: (T19 ‖ T21 ‖ T25) → (T20 ‖ T22 ‖ T24) → T26 → T23 → T16 → T17 → T27.
 (Tarefas que alteram `voz/assistente_voz.py` rodam uma de cada vez.)
