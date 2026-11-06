@@ -139,8 +139,9 @@ def test_recusa_recursao(delegacao, monkeypatch, valor):
 
 def test_comando_claude_e_resposta(delegacao):
     cli = delegacao.motores_cli
+    import trava
     base = ["claude", "-p", "Sistema\n\nPedido: Trabalho", "--output-format", "json",
-            "--permission-mode", "auto"]
+            "--permission-mode", "auto", "--settings", trava.configuracao_hook()]
     assert cli.montar_comando("claude", "Trabalho", prompt_sistema="Sistema") == base
     assert cli.montar_comando("claude", "Trabalho", "abc", "Sistema") == base + ["--resume", "abc"]
     assert cli.interpretar_linha("claude", json.dumps({"result": "Feito", "session_id": "abc"})) == {

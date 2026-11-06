@@ -158,6 +158,7 @@ agir como secretário: como usar o navegador, a memória, as confirmações e a 
 | `segundo_plano.py` | UI Automation, captura de janela e espera de ociosidade |
 | `ponte.py`, `gastos.py`, `lembretes.py` | Servidor para o celular e os dados que ele sincroniza |
 | `sentidos_mcp.py` | Servidor MCP com as ferramentas do computador para o Claude |
+| `trava.py` | Hook `PreToolUse` que bloqueia ações sensíveis sem o seu "sim" e sites de banco |
 
 ### App do PC (`app/`)
 
@@ -322,8 +323,10 @@ no Obsidian.
 - **Depois de cada resposta:** o Gemma extrai conceitos e fatos. Exemplo: "Jesus Cristo" entra
   em **Religião** e se liga a **Bíblia**. Assim, assuntos relacionados se encontram sem
   precisar reler o cofre inteiro.
-- **Filtros:** comandos operacionais ("abre o bloco de notas") e "fatos" sobre ações não viram
-  memória.
+- **Filtros:** comandos operacionais ("abre o bloco de notas"), "fatos" sobre ações e pedidos que
+  ele não entendeu ("Não entendi, pode repetir?") não viram memória.
+- **Ollama sob demanda:** se o Ollama estiver fechado, o secretário abre `ollama serve` em
+  segundo plano quando o Gemma for necessário. O modelo sai da memória sozinho depois de 30 min.
 
 ---
 
@@ -333,6 +336,9 @@ no Obsidian.
 
 - O Whisper `small` roda localmente, com detecção de fala e palavras-chave. A transcrição na
   nuvem (Groq ou OpenAI) é opcional, e o local entra como reserva se ela falhar.
+- **Sem eco do vocabulário:** em ruído, o Whisper costuma "ouvir" a própria lista de
+  palavras-chave ("Claude, Gemini, Grok, Obsidian…"). Por isso ele não recebe mais
+  `initial_prompt`, e uma transcrição que é só uma lista de termos do vocabulário é descartada.
 - **Vocabulário:** correções fixas mais as que você ensina. Por exemplo, "David" vira Deivid e
   "cloud" vira Claude.
 - **Confiança por palavra:** as palavras incertas aparecem sublinhadas para você corrigir com o
@@ -580,6 +586,16 @@ Credenciais, no serviço `secretario`.
   máquina.
 - **Confirmação:** antes de enviar inscrições, pagar, aceitar termos, criar contas, mandar
   mensagens em seu nome, apagar ou mudar o sistema.
+- **Trava de segurança (`trava.py`):** a confirmação não depende só das instruções. Um hook
+  `PreToolUse` do Claude Code roda antes de cada ferramenta e bloqueia, por código:
+  - cliques e aceites de diálogo em botões como Enviar, Pagar, Publicar, Confirmar ou Excluir,
+    e código na página que clica ou envia, até você dizer ou digitar "sim" (vale 5 minutos e
+    libera uma ação só);
+  - sites de banco e finanças, sempre;
+  - qualquer tentativa do próprio secretário de mexer no arquivo de aprovação.
+
+  A trava vale para as sessões do Claude abertas pelo secretário (`--settings`), não para o seu
+  Claude Code do dia a dia. Os bloqueios ficam registrados como eventos `Trava` no SQLite.
 - **Nunca:** digitar ou guardar senhas, guardar dados de cartão, resolver CAPTCHA ou usar códigos
   de verificação. Isso é com você.
 - **Câmera:** só quando você pede explicitamente.

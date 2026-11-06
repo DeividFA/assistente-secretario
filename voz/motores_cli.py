@@ -31,7 +31,8 @@ def montar_comando(nome, pedido, sessao=None, prompt_sistema="", pasta=None):
         return comando + ["--json", "--", prompt]
     comando = [EXECUTAVEIS[nome], "-p", prompt, "--output-format", "json"]
     if nome == "claude":
-        comando.extend(["--permission-mode", "auto"])
+        import trava
+        comando.extend(["--permission-mode", "auto", "--settings", trava.configuracao_hook()])
     if sessao:
         comando.extend(["--resume", sessao])
     return comando
