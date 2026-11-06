@@ -112,12 +112,51 @@ def disponivel(nome):
         return False, "Executável não encontrado."
     if motor["chave"] is not None:
         return (True, "") if ler_chave(motor["chave"]) else (False, "Chave não configurada.")
+    return (True, "") if garantir_ollama() else (False, "Ollama indisponível.")
+
+
+OLLAMA = "http://localhost:11434"
+
+
+def _ollama_responde(timeout=2):
     try:
-        with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2) as resposta:
+        with urllib.request.urlopen(OLLAMA + "/api/tags", timeout=timeout) as resposta:
             json_modulo.loads(resposta.read().decode("utf-8"))
-        return True, ""
+        return True
     except Exception:
-        return False, "Ollama indisponível."
+        return False
+
+
+def _executavel_ollama():
+    instalado = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Ollama", "ollama.exe")
+    return shutil.which("ollama") or (instalado if os.path.isfile(instalado) else None)
+
+
+def garantir_ollama(espera=20, iniciar=None, dormir=None):
+    """Abre o Ollama em segundo plano quando ele está fechado e espera ele responder.
+
+    O Deivid costuma fechar o Ollama para liberar memória; o Gemma e o aprendizado da
+    memória precisam dele. O modelo sai da RAM sozinho pelo keep_alive das chamadas.
+    """
+    if _ollama_responde():
+        return True
+    executavel = _executavel_ollama()
+    if not executavel:
+        return False
+    import subprocess
+    import time
+    try:
+        (iniciar or subprocess.Popen)(
+            [executavel, "serve"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=0x08000000 | 0x00000008 if os.name == "nt" else 0)
+    except OSError:
+        return False
+    for _ in range(int(espera * 2)):
+        (dormir or time.sleep)(0.5)
+        if _ollama_responde():
+            return True
+    return False
 
 
 def listar():

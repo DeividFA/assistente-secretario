@@ -14,3 +14,10 @@ def banco_de_falas_isolado(tmp_path, monkeypatch):
     # testes passam ou falham conforme o que foi dito ao secretário no dia.
     import padrao_fala
     monkeypatch.setattr(padrao_fala, "BANCO", tmp_path / "falas_teste.db")
+
+
+@pytest.fixture(autouse=True)
+def ollama_nunca_abre_de_verdade(monkeypatch):
+    # garantir_ollama() abriria o Ollama real; os testes só veem se ele "responde".
+    import provedores
+    monkeypatch.setattr(provedores, "_executavel_ollama", lambda: None)
