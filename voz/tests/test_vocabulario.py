@@ -111,6 +111,29 @@ def test_transcrever_vad_vocabulario_cache_e_correcao(monkeypatch, correcoes):
     comum.transcrever(None)
     assert len(chamadas) == 2
     assert argumentos[0]["hotwords"] == "Deivid Secretário"
-    assert "Deivid" in argumentos[0]["initial_prompt"]
+    assert "initial_prompt" not in argumentos[0]
     assert argumentos[0]["vad_filter"] is True
     assert argumentos[0]["vad_parameters"] == {"min_silence_duration_ms": 500}
+
+
+@pytest.mark.parametrize("texto", [
+    "Claude, Gemini, Grok, Obsidian, LinkedIn, Ollama, ChatGPT.",
+    "Claude Gemini Grok Obsidian LinkedIn",
+    "Claude, Gemini, Grok, Oble, Instagram.",
+    "Claude, Gemini, Grok, Olahoma, Google, LinkedIn, Ollama, e deimigra-te.com.br",
+])
+def test_eco_do_vocabulario_descarta_lista_repetida(texto):
+    assert vocabulario.eco_do_vocabulario(texto, vocabulario.FIXOS)
+
+
+@pytest.mark.parametrize("texto", [
+    "abre o meu LinkedIn",
+    "Secretário, abre o Claude e o Gemini",
+    "da Lívia, Instagram.",
+    "Instagram.com.br",
+    "Não pergunto o ChatGPT, é um resumo sobre mim.",
+    "Gemini, Claude ou Grok: qual é o melhor?",
+    "usar codex.",
+])
+def test_eco_do_vocabulario_mantem_pedidos(texto):
+    assert not vocabulario.eco_do_vocabulario(texto, vocabulario.FIXOS)
