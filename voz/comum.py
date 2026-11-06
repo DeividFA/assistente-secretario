@@ -32,6 +32,7 @@ BLOCO = 480  # 30 ms
 # Frases que o Whisper "alucina" em silêncio/ruído.
 ALUCINACOES = {
     "obrigado", "obrigada", "tchau", "legendas pela comunidade amara.org",
+    "legendas pela comunidade de amara.org",
     "legenda adriana zanotto", "e ai", "...",
 }
 
@@ -253,8 +254,8 @@ def transcrever(audio, detalhado=False):
         def reconhecer(idioma):
             segmentos, info = _modelo.transcribe(
                 audio, language=idioma, beam_size=1, condition_on_previous_text=False,
+                # Sem initial_prompt: em ruído o Whisper repetia a lista do prompt como fala.
                 hotwords=" ".join(_termos), word_timestamps=detalhado,
-                initial_prompt="Vocabulário: " + ", ".join(_termos[:15]) + ".",
                 vad_filter=True, vad_parameters={"min_silence_duration_ms": 500})
             segmentos = list(segmentos)
             return {"texto": " ".join(s.text.strip() for s in segmentos).strip(),
@@ -265,7 +266,8 @@ def transcrever(audio, detalhado=False):
 
         detalhes = padrao_fala.escolher_idioma(reconhecer, configuracao.get('idiomas', ['pt']))
         texto = detalhes['texto']
-    if normalizar(texto) in {normalizar(a) for a in ALUCINACOES}:
+    if (normalizar(texto) in {normalizar(a) for a in ALUCINACOES}
+            or vocabulario.eco_do_vocabulario(texto, _termos or [])):
         texto = ""
         detalhes['palavras'] = []
     detalhes['texto'] = vocabulario.corrigir(texto)

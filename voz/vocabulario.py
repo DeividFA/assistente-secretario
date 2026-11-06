@@ -107,6 +107,38 @@ def aprender_correcao(errado, certo):
         temporario.replace(CORRECOES)
 
 
+_SEM_CONTEUDO = {"secretario", "secretaria", "e", "o", "a", "os", "as", "de", "da", "do",
+                 "com", "br", "www", "http", "https", "net", "org"}
+
+
+def eco_do_vocabulario(texto, termos):
+    """True quando a transcrição é só o vocabulário repetido pelo Whisper.
+
+    Em ruído ou silêncio, o Whisper costuma devolver as palavras-chave que recebeu
+    ("Claude, Gemini, Grok, Obsidian, LinkedIn…"). Um pedido de verdade começa com um
+    verbo ou tem palavras fora do vocabulário; a lista não.
+    """
+    from comum import normalizar
+
+    if not texto or "?" in texto:
+        return False
+    conhecidas = {normalizar(p) for termo in termos for p in re.findall(r"\w+", termo or "")}
+    conhecidas = {p for p in conhecidas if len(p) > 2 and p not in _SEM_CONTEUDO}
+    if not conhecidas:
+        return False
+
+    def conhecida(palavra):
+        return palavra in conhecidas or any(
+            SequenceMatcher(None, palavra, alvo).ratio() >= 0.8 for alvo in conhecidas)
+
+    palavras = [normalizar(p) for p in re.findall(r"\w+", texto)]
+    palavras = [p for p in palavras if len(p) > 2 and p not in _SEM_CONTEUDO]
+    if len(palavras) < 3:
+        return False
+    marcadas = [conhecida(p) for p in palavras]
+    return marcadas[0] and marcadas[1] and sum(marcadas) >= 3 and sum(marcadas) * 2 >= len(palavras)
+
+
 def ativacao_tolerante(texto):
     """Retorna o trecho de ativação nas duas primeiras palavras, ou None."""
     from comum import normalizar

@@ -9,6 +9,8 @@ from comum import normalizar
 
 
 def _chamar(mensagens):
+    import provedores
+    provedores.garantir_ollama()
     dados = json.dumps({
         "model": "gemma3:4b", "messages": mensagens, "format": "json",
         "stream": False, "keep_alive": "30m", "options": {"temperature": 0.1},
@@ -52,9 +54,18 @@ def comando_operacional(pergunta):
     return bool(palavras) and palavras[0] in VERBOS_ACAO and len(palavras) <= 8
 
 
+# Respostas de quem não entendeu o pedido: o "pedido" costuma ser ruído transcrito, e
+# os nomes soltos nele viravam conceitos falsos no cofre.
+NAO_ENTENDEU = re.compile(r"^(nao entendi|desculpe,? nao entendi|pode repetir)\b")
+
+
+def nao_entendeu(resposta):
+    return bool(NAO_ENTENDEU.match(normalizar(resposta or "")))
+
+
 def extrair(pergunta, resposta, chamar=None) -> dict:
     vazio = {"conceitos": [], "fatos_usuario": []}
-    if comando_operacional(pergunta):
+    if comando_operacional(pergunta) or nao_entendeu(resposta):
         return vazio
     try:
         prompt = '''Extraia conhecimento da conversa do Deivid. Retorne somente JSON

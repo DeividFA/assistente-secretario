@@ -159,3 +159,26 @@ def test_openrouter_exige_modelo_e_api_exige_chave(provedores, monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "segredo")
     with pytest.raises(RuntimeError, match="modelo"):
         provedores.chamar_api("openrouter", [])
+
+
+def test_garantir_ollama_abre_quando_fechado(monkeypatch):
+    import provedores
+    respostas = iter([False, False, True])
+    abertos = []
+    monkeypatch.setattr(provedores, "_ollama_responde", lambda timeout=2: next(respostas))
+    monkeypatch.setattr(provedores, "_executavel_ollama", lambda: "ollama.exe")
+    assert provedores.garantir_ollama(iniciar=lambda cmd, **_: abertos.append(cmd),
+                                      dormir=lambda _: None)
+    assert abertos == [["ollama.exe", "serve"]]
+
+
+def test_garantir_ollama_sem_instalacao(monkeypatch):
+    import provedores
+    monkeypatch.setattr(provedores, "_ollama_responde", lambda timeout=2: False)
+    assert not provedores.garantir_ollama(iniciar=lambda *a, **k: 1 / 0)
+
+
+def test_garantir_ollama_ja_aberto_nao_inicia(monkeypatch):
+    import provedores
+    monkeypatch.setattr(provedores, "_ollama_responde", lambda timeout=2: True)
+    assert provedores.garantir_ollama(iniciar=lambda *a, **k: 1 / 0)

@@ -33,6 +33,11 @@ from datetime import datetime
 from pathlib import Path
 
 import fila
+
+# O servidor MCP "sentidos" pode levar mais de 30 s para subir com o PC ocupado (Whisper,
+# navegador): o Claude desistia por CONNECT_TIMEOUT e ficava sem as ferramentas do PC.
+# As sessões do Claude (e delegações) herdam este limite maior.
+os.environ.setdefault("MCP_TIMEOUT", "120000")
 import backup
 import registro
 import diagnostico
@@ -45,6 +50,7 @@ import dispositivos
 import vozes
 import memoria
 import extrator
+import trava
 import vocabulario
 import padrao_fala
 from vocabulario import ativacao_tolerante
@@ -603,7 +609,8 @@ class Assistente:
         erro = ""
         try:
             args = motores_cli.resolver_executavel(CLAUDE) + ["-p", pedido, "--output-format", "stream-json", "--verbose",
-                    "--permission-mode", "auto", "--append-system-prompt", PROMPT_VOZ]
+                    "--permission-mode", "auto", "--append-system-prompt", PROMPT_VOZ,
+                    "--settings", trava.configuracao_hook()]
             trabalho = _contexto.trabalho
             if trabalho['sessao']:
                 args += ['--resume', trabalho['sessao']]
@@ -702,6 +709,7 @@ class Assistente:
 
     def executar(self, comando):
         """Trata comandos de controle ou dispara uma tarefa."""
+        trava.registrar_fala(comando)
         c = normalizar(comando)
         if self.reparo_pendente and c.startswith('orientacao:'):
             id, _ = self.reparo_pendente
@@ -815,6 +823,7 @@ class Assistente:
             threading.Thread(target=self.enfileirar, args=(comando,), daemon=True).start()
 
     def comando_celular(self, texto, aparelho):
+        trava.registrar_fala(texto)
         with self.trava:
             id = fila.adicionar(texto, motor=self.motor)
             try:

@@ -20,6 +20,8 @@ def _chamar(mensagens, imagens=None):
         "stream": False, "keep_alive": "30m",
         "options": {"temperature": 0.2, "num_ctx": 4096},
     }
+    import provedores
+    provedores.garantir_ollama()
     requisicao = Request(
         "http://localhost:11434/api/chat",
         data=json.dumps(dados).encode("utf-8"),
