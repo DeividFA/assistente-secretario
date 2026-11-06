@@ -101,3 +101,14 @@ def test_requisicao_padrao(extrator, monkeypatch):
 
     monkeypatch.setattr(extrator.urllib.request, "urlopen", abrir)
     assert extrator.extrair("oi", "olá") == {"conceitos": [], "fatos_usuario": []}
+
+
+def test_extrair_ignora_resposta_de_quem_nao_entendeu(extrator):
+    def chamar(_):
+        raise AssertionError("não deveria chamar o modelo")
+
+    for resposta in ("Não entendi, pode repetir?", 'Não entendi o "queimou". Quer abrir?',
+                     "Pode repetir?"):
+        assert extrator.extrair("Claude, Gemini, Grok, Oble", resposta, chamar=chamar) == {
+            "conceitos": [], "fatos_usuario": []}
+    assert not extrator.nao_entendeu("Abri o Instagram no Chrome.")
