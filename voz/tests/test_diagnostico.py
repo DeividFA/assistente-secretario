@@ -82,6 +82,8 @@ def test_saude_completa_com_dependencias_falsas(tmp_path, monkeypatch):
         def __exit__(self, *args):
             pass
     monkeypatch.setattr(diagnostico.urllib.request, 'urlopen', lambda *a, **k: Resposta())
+    import provedores
+    monkeypatch.setattr(provedores, '_ollama_responde', lambda timeout=2: True)
     chamadas = []
     def rodar(args, **opcoes):
         chamadas.append((args, opcoes))
@@ -90,3 +92,20 @@ def test_saude_completa_com_dependencias_falsas(tmp_path, monkeypatch):
     assert all(diagnostico.verificar_saude(completo=True, microfone=lambda: True).values())
     assert chamadas[0][0][1:] == ['-m', 'pytest', 'voz/tests', '-q']
     assert chamadas[0][1]['timeout'] == 300
+
+
+def test_queda_tem_resumo_legivel():
+    assert diagnostico.resumo_queda({'codigo': 0, 'stderr': ''}) == (
+        'O motor de voz parou sozinho (código 0), sem mensagem de erro')
+    assert diagnostico.resumo_queda({'codigo': 1, 'stderr': 'Traceback\n  ...\nOSError: mic\n'}) == (
+        'O motor de voz parou sozinho (código 1), com o erro "OSError: mic"')
+
+
+def test_importar_queda_guarda_saida_completa(tmp_path):
+    banco = tmp_path / 'bugs.db'
+    (tmp_path / 'bug_1.json').write_text('{"codigo": 1, "stderr": "linha 1\\nOSError: mic"}',
+                                         encoding='utf-8')
+    diagnostico.importar_quedas(tmp_path, banco)
+    bug = registro.listar_bugs(banco)[0]
+    assert bug['resumo'] == 'O motor de voz parou sozinho (código 1), com o erro "OSError: mic"'
+    assert 'linha 1' in registro.detalhe_bug(bug['id'], banco)['traceback']

@@ -35,7 +35,8 @@ def assinatura(erro, traceback=None, origem='motor'):
     return hashlib.sha256(f'{type(erro).__name__}:{local}'.encode()).hexdigest()
 
 
-def registrar_bug(origem, erro, traceback=None, contexto=None, tipo='bug', banco=registro.BANCO):
+def registrar_bug(origem, erro, traceback=None, contexto=None, tipo='bug', banco=registro.BANCO,
+                  detalhe=None):
     if tipo not in ('bug', 'melhoria'):
         raise ValueError('Tipo deve ser bug ou melhoria')
     try:
@@ -44,6 +45,8 @@ def registrar_bug(origem, erro, traceback=None, contexto=None, tipo='bug', banco
                   if k in ('pedido', 'motor', 'ferramenta')}
         seguro['origem'] = limpar(origem, 100)
         rastro = ''.join(tb.format_exception(type(erro), erro, traceback)) if traceback else str(erro)
+        if detalhe:
+            rastro += '\n\n' + str(detalhe)
         chave = assinatura(erro, traceback, origem)
         if tipo == 'melhoria':
             chave = hashlib.sha256(('melhoria:' + str(erro)).encode()).hexdigest()
@@ -69,11 +72,25 @@ def instalar_hooks():
     sys.excepthook, threading.excepthook = hook, hook_thread
 
 
+def resumo_queda(dados):
+    """Frase legível para a queda do motor (o resumo é falado ao Deivid)."""
+    codigo = dados.get('codigo') if isinstance(dados, dict) else None
+    linhas = [l.strip() for l in str((dados or {}).get('stderr') or '').splitlines() if l.strip()] \
+        if isinstance(dados, dict) else []
+    texto = f'O motor de voz parou sozinho (código {codigo})'
+    if linhas:
+        texto += f', com o erro "{linhas[-1][:160]}"'
+    elif codigo == 0:
+        texto += ', sem mensagem de erro'
+    return texto
+
+
 def importar_quedas(pasta=None, banco=registro.BANCO):
     for arquivo in (Path(pasta) if pasta else REPO / 'voz' / 'sinais').glob('bug_*.json'):
         try:
             dados = json.loads(arquivo.read_text(encoding='utf-8'))
-            id = registrar_bug('queda_motor', RuntimeError(limpar(dados, 8000)), banco=banco)
+            id = registrar_bug('queda_motor', RuntimeError(resumo_queda(dados)), banco=banco,
+                               detalhe=json.dumps(dados, ensure_ascii=False))
             if id is not None:
                 arquivo.unlink()
         except (OSError, ValueError):
@@ -119,8 +136,9 @@ def verificar_saude(completo=False, microfone=None):
     }
 
     def ollama():
-        with urllib.request.urlopen('http://localhost:11434/api/tags', timeout=3) as resposta:
-            return resposta.status == 200
+        # Fechado não é defeito: ele é aberto sob demanda. Só falha se não abrir.
+        import provedores
+        return provedores.garantir_ollama()
 
     def abrir_microfone():
         import sounddevice
